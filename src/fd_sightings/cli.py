@@ -80,6 +80,10 @@ def make_parser() -> argparse.ArgumentParser:
     review.add_argument("--bind", default="127.0.0.1")
     review.add_argument("--port", type=int, default=8765)
 
+    public = sub.add_parser("public", help="Run the read-only public archive and GCVE API")
+    public.add_argument("--bind", default="127.0.0.1")
+    public.add_argument("--port", type=int, default=8766)
+
     approved = sub.add_parser("submit-approved", help="Process analyst-approved observations")
     approved.add_argument("--limit", type=int, default=0)
     approved.add_argument("--write", action="store_true", help="Required safety switch; otherwise print payloads")
@@ -175,6 +179,11 @@ def main(argv: list[str] | None = None) -> int:
             from .review_ui import serve
             _, lookup = _clients(args)
             serve(store, lookup, args.bind, args.port)
+            return 0
+
+        if args.command == "public":
+            from .public_ui import serve
+            serve(store, args.bind, args.port)
             return 0
 
         if args.command == "export":

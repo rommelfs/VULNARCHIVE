@@ -1,5 +1,5 @@
 [Unit]
-Description=VULNARCHIVE public read-only API and archive
+Description=VULNARCHIVE private analyst review UI
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +9,7 @@ User=vulnarchive
 Group=vulnarchive
 WorkingDirectory=/opt/vulnarchive
 EnvironmentFile=/etc/vulnarchive/vulnarchive.env
-ExecStart=/opt/vulnarchive/.venv/bin/fd-sightings public --bind 127.0.0.1 --port 8766
+ExecStart=/opt/vulnarchive/.venv/bin/fd-sightings review --bind 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

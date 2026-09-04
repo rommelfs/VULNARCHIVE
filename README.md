@@ -183,19 +183,12 @@ Policy thresholds are configured through environment variables:
 
 The evidence score is deterministic and records which publication rule fired. It measures whether the post contains enough structured material to publish; it does not claim that the report is correct.
 
-## Vulnerability-Lookup node
+## Publication target and public service
 
-The target instance should use the settings in `config/vulnerability-lookup.generic.json.example`, especially:
-
-```json
-{
-  "local_instance_name": "gna-1988",
-  "local_instance_vulnid_pattern": "^GCVE-1988-[0-9]{4}-[0-9]{4,19}$",
-  "local_instance_vulnid_example": "GCVE-1988-yyyy-nnnn"
-}
-```
-
-With a current Vulnerability-Lookup release this makes local records available through the BCP-03 endpoint `/api/gcve/publication`. The GNA directory's `gcve_pull_api` should point to `https://vuln.freearchive.org`.
+`VL_URL` identifies an independently operated API used by the collector for lookup and
+publication. VULNARCHIVE does not require a local Vulnerability-Lookup process. Run the
+separate read-only public service with `fd-sightings public`; deployment routing and the
+private review-service boundary are documented in `DEPLOYMENT.md`.
 
 ## Matching policy
 

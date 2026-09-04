@@ -58,7 +58,9 @@ class Store:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        # HTTP servers may be started from a supervisor/test thread; each server
+        # remains single-threaded and SQLite serializes access with busy_timeout.
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA foreign_keys=ON")
@@ -257,3 +259,13 @@ class Store:
             item["response"] = json.loads(str(item.pop("response_json")))
             result.append(item)
         return result
+
+    def public_gcve_records(self) -> list[dict[str, object]]:
+        """Return only successfully published GCVE payloads for the public feed."""
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            """SELECT payload_json FROM automatic_publications
+            WHERE kind='gcve' AND status='published'
+            ORDER BY json_extract(payload_json, '$.cveMetadata.dateUpdated'), gcve_id"""
+        ).fetchall()
+        return [json.loads(str(row["payload_json"])) for row in rows]
