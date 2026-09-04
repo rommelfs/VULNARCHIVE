@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -161,22 +162,6 @@ def build_gcve_record(
     }
 
 
-def _reserve(lookup: VulnerabilityLookup, year: int, policy: PublicationPolicy) -> str:
-    try:
-        vulnerability_id = lookup.reserve_gcve(year, policy.gna_short_name)
-    except HTTPError as exc:
-        if not policy.auto_create_year_range or exc.status != 400 or "range" not in exc.body.casefold():
-            raise
-        lookup.create_gcve_year_range(year)
-        vulnerability_id = lookup.reserve_gcve(year, policy.gna_short_name)
-    expected_prefix = f"GCVE-{policy.gna_id}-{year}-"
-    if not vulnerability_id.upper().startswith(expected_prefix):
-        raise RuntimeError(
-            f"Local instance reserved {vulnerability_id}; expected an identifier beginning with {expected_prefix}"
-        )
-    return vulnerability_id.upper()
-
-
 def _publish_sighting(
     store: Store,
     lookup: VulnerabilityLookup,
@@ -306,11 +291,27 @@ def execute_automatic_publication(
 
         try:
             if not gcve_id:
-                gcve_id = _reserve(lookup, publication_year(row), policy)
+                gcve_id = store.reserve_gcve_id(publication_year(row))
                 store.save_publication(plan.source_url, key, "gcve", gcve_id=gcve_id, status="reserved")
             payload = build_gcve_record(row, gcve_id, plan, policy)
             store.save_publication(plan.source_url, key, "gcve", gcve_id=gcve_id, status="sending", payload=payload)
             status, response = lookup.publish_gcve(gcve_id, payload)
+            try:
+                store.publish_gcve_record(
+                    plan.source_url,
+                    payload,
+                    record_type=plan.record_type,
+                    assigner=policy.gna_short_name,
+                )
+            except sqlite3.IntegrityError:
+                # A retry may reach this point after the remote write completed but
+                # before the operations ledger was marked as published.
+                store.update_gcve_record(
+                    gcve_id,
+                    payload,
+                    record_type=plan.record_type,
+                    assigner=policy.gna_short_name,
+                )
             store.save_publication(plan.source_url, key, "gcve", gcve_id=gcve_id, status="published", payload=payload, response=response)
             current.append({"kind": "gcve", "id": gcve_id, "status": status})
             if policy.publish_sightings:
