@@ -68,6 +68,29 @@ class HTTP:
             raise CheckFailure(f"{method} {path}: invalid JSON: {exc}") from exc
 
 
+def gcve_base(http: HTTP) -> str:
+    """Return and validate the base URL advertised by security.txt."""
+    status, body, headers = http.request("/.well-known/security.txt")
+    if status != 200:
+        raise CheckFailure(f"security.txt returned HTTP {status}")
+    if headers.get("Content-Type", "").lower() != "text/plain; charset=utf-8":
+        raise CheckFailure(
+            "security.txt must use Content-Type 'text/plain; charset=utf-8', got "
+            f"{headers.get('Content-Type')!r}"
+        )
+    try:
+        lines = body.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise CheckFailure("security.txt is not valid UTF-8") from exc
+    values = [line.partition(":")[2].strip() for line in lines if line.lower().startswith("gcve:")]
+    if len(values) != 1:
+        raise CheckFailure("security.txt must contain exactly one GCVE field")
+    parsed = urllib.parse.urlsplit(values[0])
+    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+        raise CheckFailure("security.txt GCVE field must be an absolute HTTPS base URL")
+    return values[0].rstrip("/")
+
+
 def records(response: Any) -> list[dict[str, Any]]:
     """Extract records while accepting the two BCP-03 envelope revisions."""
     if isinstance(response, list):
@@ -194,7 +217,10 @@ def run(args: argparse.Namespace) -> None:
         raise CheckFailure("refusing destructive check without --allow-write")
     if not args.api_key:
         raise CheckFailure("--api-key or VL_API_KEY is required")
-    http = HTTP(args.url, args.api_key, args.timeout)
+    discovery_http = HTTP(args.url, args.api_key, args.timeout)
+    # All public resource checks below deliberately use the advertised value,
+    # so a stale or unusable GCVE base in security.txt fails acceptance.
+    http = HTTP(gcve_base(discovery_http), args.api_key, args.timeout)
 
     first, _ = http.json(query(page=1, per_page=args.page_size))
     second, _ = http.json(query(page=2, per_page=args.page_size))
