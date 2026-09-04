@@ -1,253 +1,168 @@
 # VULNARCHIVE production deployment
 
-The public host consists of two local services behind Apache:
+## 1. Verbindliche Kompatibilitätsbasis
 
-- Vulnerability-Lookup on `127.0.0.1:10001` is the canonical website, GCVE publication store, BCP-03 API, Sighting API, and dump publisher.
-- This repository on `127.0.0.1:8765` collects mailing-list posts and serves stable `/archive/` copies. Its review and publication UI should remain reachable only locally or through an authenticated administration path.
+Für Produktion ist **Vulnerability-Lookup v2.13.0** aus dem offiziellen Repository
+`https://github.com/cve-search/vulnerability-lookup.git` festgelegt. Die maschinenlesbare
+Sperre steht in `deploy/vulnerability-lookup.version`; weder `main` noch `latest` darf
+installiert werden. Das Installationsskript prüft den exakten Tag und schreibt den dabei
+aufgelösten Git-Commit nach `/opt/vulnerability-lookup/INSTALLED_COMMIT`. Dieser Wert muss
+im Betriebsprotokoll und Backup festgehalten werden. Ein verschobener Tag ist gegenüber
+dem gesicherten Commit als Supply-Chain-Abweichung zu behandeln.
 
-## 1. Install the collector
+**Nur diese Basis ist für VULNARCHIVE freigegeben:** In v2.13.0 stellt
+`/api/gcve/publication` BCP-03 bereit, einschließlich `since`-basierter inkrementeller
+Synchronisation und Pagination. Dieselbe Version erzeugt die GNA-Dumps unter `/dumps/`
+und liefert die API-Policy unter `/.well-known/api-policy.json`. Eine neuere Version gilt
+nicht automatisch als kompatibel, selbst wenn ihre API antwortet.
 
-Copy the project to `/opt/vulnarchive`, create the service account, and ensure only that account can read the environment file:
+## 2. Dienste und Datenflüsse
 
-```sh
-sudo useradd --system --home /opt/vulnarchive --shell /usr/sbin/nologin vulnarchive
-sudo python3 -m venv /opt/vulnarchive/.venv
-sudo /opt/vulnarchive/.venv/bin/python -m pip install -e /opt/vulnarchive
-sudo install -d -o vulnarchive -g vulnarchive -m 0750 /opt/vulnarchive/data /etc/vulnarchive
-sudo install -o root -g vulnarchive -m 0640 config/vulnarchive.env.example /etc/vulnarchive/vulnarchive.env
-```
+Der Host benötigt PostgreSQL (Benutzer, Veröffentlichungsmetadaten und Webdaten),
+Kvrocks auf `127.0.0.1:10002` (persistenter Vulnerability-Keyspace), Redis/Valkey auf
+`127.0.0.1:6379` (Cache und Worker-Koordination), den Web/API-Prozess auf
+`127.0.0.1:10001` sowie die Vulnerability-Lookup-Hintergrund-/Feed-Worker. PostgreSQL,
+Redis und Kvrocks dürfen nicht öffentlich lauschen. Apache ist der einzige öffentliche
+Ingress. Der Collector auf `127.0.0.1:8765` bedient ausschließlich `/archive/`.
 
-Replace `VL_API_KEY` and confirm that `VA_GNA_ORG_UUID` is identical to the stable `local_instance_uuid` used by the Vulnerability-Lookup instance.
-
-## 2. Configure Vulnerability-Lookup
-
-Merge `config/vulnerability-lookup.generic.json.example` into its `config/generic.json`. Required values include:
-
-```json
-{
-  "public_domain": "vuln.freearchive.org",
-  "local_instance_name": "gna-1988",
-  "local_instance_vulnid_pattern": "^GCVE-1988-[0-9]{4}-[0-9]{4,19}$",
-  "local_instance_vulnid_example": "GCVE-1988-yyyy-nnnn"
-}
-```
-
-Create an API user with permissions for Sightings, vulnerability-ID ranges, vulnerability-ID reservation, and vulnerability publication. Keep the instance UUID stable and backed up.
-
-## 3. Install services
+Installiere versionsgebundene Distribution-Pakete aus dem internen Paket-Snapshot und
+halte deren Versionen im Betriebsprotokoll fest:
 
 ```sh
-sudo install -o root -g root -m 0644 deploy/vulnarchive-web.service /etc/systemd/system/
-sudo install -o root -g root -m 0644 deploy/vulnarchive-sync.service /etc/systemd/system/
-sudo install -o root -g root -m 0644 deploy/vulnarchive-sync.timer /etc/systemd/system/
+sudo apt-get install postgresql redis-server kvrocks git python3 poetry
+sudo systemctl disable --now redis-server kvrocks postgresql
+sudoedit /etc/redis/redis.conf       # bind 127.0.0.1; protected-mode yes
+sudoedit /etc/kvrocks/kvrocks.conf  # bind 127.0.0.1; port 10002; persistente dir
+sudo systemctl enable --now postgresql redis-server kvrocks
+```
+
+## 3. Installation der festgelegten Version
+
+```sh
+sudo useradd --system --home /opt/vulnerability-lookup --shell /usr/sbin/nologin vulnerability-lookup
+chmod +x deploy/install-vulnerability-lookup.sh
+sudo ./deploy/install-vulnerability-lookup.sh
+cat /opt/vulnerability-lookup/INSTALLED_COMMIT
+```
+
+Das Release bringt sein Dependency-Lockfile mit; `poetry install --sync` verwendet dieses.
+Repository, Release und installierter Commit gehören gemeinsam in Change-Ticket und
+Backup-Manifest.
+
+## 4. Datenbankinitialisierung und Migration
+
+```sh
+sudo -u postgres psql --set ON_ERROR_STOP=1 -f deploy/postgresql-init.sql
+sudo -u vulnerability-lookup env \
+  VULNERABILITYLOOKUP_CONFIG=/etc/vulnerability-lookup/generic.json \
+  /opt/vulnerability-lookup/.venv/bin/flask --app website.app db upgrade
+```
+
+Die Migration ist vor dem Start der Web- und Worker-Prozesse auszuführen. Vor jedem
+erneuten `db upgrade` sind konsistente PostgreSQL- und Kvrocks-Snapshots erforderlich.
+Nicht einzelne Migrationen überspringen oder Tabellen per Hand erzeugen.
+
+## 5. Vollständige Instanzkonfiguration
+
+`config/vulnerability-lookup.generic.json.example` ist ein vollständiger, bewusst
+kleiner Override über den unveränderten Upstream-Defaults von v2.13.0. Jeder Wert ist
+verbindlich zugeordnet:
+
+| Schlüssel | Produktionswert | Zweck |
+|---|---|---|
+| `public_domain` | `vuln.freearchive.org` | kanonischer externer Host |
+| `user_accounts` | `true` | separates Publikationskonto ermöglichen |
+| `fulltextsearch` | `true` | Suche/Resolver des Collectors |
+| `local_instance_name` | `gna-1988` | Dump- und lokale Quellenbezeichnung |
+| `local_instance_uuid` | dokumentierte UUID im Beispiel | stabile Herausgeberidentität; niemals regenerieren |
+| `local_instance_vulnid_pattern` | `^GCVE-1988-[0-9]{4}-[0-9]{4,19}$` | ausschließlich GNA-1988-IDs |
+| `local_instance_vulnid_example` | `GCVE-1988-yyyy-nnnn` | UI/API-Beispiel |
+| `local_instance_vulnid_max_serial` | `50000000` | oberes Reservierungslimit |
+| `local_instance_vulnid_priority_bound` | `20000` | Upstream-Prioritätsgrenze |
+
+```sh
+sudo install -d -o root -g vulnerability-lookup -m 0750 /etc/vulnerability-lookup
+sudo install -o root -g vulnerability-lookup -m 0640 \
+  config/vulnerability-lookup.generic.json.example /etc/vulnerability-lookup/generic.json
+sudo install -o root -g vulnerability-lookup -m 0640 \
+  deploy/vulnerability-lookup.env.example /etc/vulnerability-lookup/service.env
+```
+
+Keine UUID, Grenze oder Regex darf durch Umgebungsvariablen abweichend überschrieben
+werden. Passwörter/API-Secrets kommen ausschließlich in `secrets.env` (Modus 0640).
+
+## 6. Web- und Hintergrunddienste
+
+```sh
+sudo install -m 0644 deploy/vulnerability-lookup-{web,workers}.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now vulnarchive-web.service
+sudo systemctl enable --now vulnerability-lookup-workers vulnerability-lookup-web
+ss -ltn | grep -E '127.0.0.1:(6379|10001|10002)'
+curl --fail http://127.0.0.1:10001/.well-known/api-policy.json
 ```
 
-Do not start or enable `vulnarchive-sync.timer` yet. The timer remains disabled
-until every rollout gate in section 5 has passed.
+`vulnerability-lookup-web.service` bindet ausdrücklich nur an `127.0.0.1:10001`.
+Anschließend werden die vorhandenen `vulnarchive-*`-Units installiert und Apache mit
+`deploy/apache-vuln.freearchive.org.conf` vorgeschaltet.
 
-Before any controlled single publication, the read-only deployment preflight is
-mandatory. Pass the `generic.json` actually used by Vulnerability-Lookup; the
-script compares it with the checked-in reference and
-`/etc/vulnarchive/vulnarchive.env`, then performs unauthenticated `GET` requests
-against the public API policy, GCVE publication endpoint, and expected
-`gna-1988.ndjson` dump:
+## 7. Minimales Publikationskonto
+
+Lege in der Vulnerability-Lookup-Administration ein dediziertes Konto
+`vulnarchive-publisher` ohne Administrator-, Benutzerverwaltungs-, Import-/Feed- oder
+Konfigurationsrechte an. Erteile nur diese API-Fähigkeiten:
+
+1. **Sightings erstellen**,
+2. **Vulnerability-ID-Ranges lesen und für GNA 1988 erstellen**,
+3. **IDs ausschließlich aus GNA-1988-Ranges reservieren**, und
+4. **lokale Vulnerabilities/GCVE-Publikationen erstellen**.
+
+Kein Lösch-, Änderungs-, Rollenverwaltungs- oder Fremd-GNA-Recht ist erforderlich.
+Wenn die installierte Rollenmaske eine Fähigkeit nur als breiteres Recht anbietet, ist
+das als Ausnahme zu dokumentieren und durch einen Integrationstest auf GNA 1988 zu
+begrenzen. Der API-Key liegt nur in `/etc/vulnarchive/vulnarchive.env` (0640,
+`root:vulnarchive`). `/api/user/me` muss das Konto bestätigen.
+
+## 8. Collector und öffentlicher Abnahmetest
+
+Installiere den Collector wie in `README.md`, danach dessen systemd-Units, aber aktiviere
+den Timer erst nach einem Dry Run:
 
 ```sh
-cd /opt/vulnarchive
-sudo -u vulnarchive ./deploy/check-vulnerability-lookup.py \
-  --lookup-config /opt/vulnerability-lookup/config/generic.json
+sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
+curl --fail https://vuln.freearchive.org/.well-known/api-policy.json
+curl --fail 'https://vuln.freearchive.org/api/gcve/publication?per_page=1'
+curl --fail 'https://vuln.freearchive.org/api/gcve/publication?since=2026-09-01T00:00:00Z&per_page=1'
+curl --fail https://vuln.freearchive.org/dumps/gna-1988.ndjson
 ```
 
-The command must finish with `READY` before proceeding. It does not read or send
-`VL_API_KEY`, reserve vulnerability IDs, or publish records. If the effective
-configuration file is not locally accessible, omit `--lookup-config` to run the
-reduced public-metadata and endpoint checks; that reduced check does not replace
-the mandatory full check before publication.
+Pagination muss anhand des von der Antwort gelieferten Next-Links/Cursors bis zur
+letzten Seite getestet werden; keine URL-Konvention erraten. Prüfe einen nach dem
+`since`-Zeitpunkt publizierten historischen Backfill und validiere einen Record mit dem
+offiziellen BCP-05-Validator. Erst dann `vulnarchive-sync.timer` aktivieren.
 
-## 4. Configure Apache
+## 9. Backup und Betrieb
 
-Enable the required modules, install the supplied virtual host, and reload Apache:
+Täglich zu sichern sind PostgreSQL, die persistente Kvrocks-Datenablage, Konfiguration,
+Instanz-UUID, `INSTALLED_COMMIT`, Secrets getrennt verschlüsselt sowie das Collector-
+Ledger. Redis ist Cache/Koordination, muss aber vor Wartung sauber beendet werden.
+Web und Worker werden gemeinsam überwacht; fehlende Worker können zu veralteten Dumps
+führen, obwohl HTTP noch 200 liefert.
 
-```sh
-sudo a2enmod proxy proxy_http headers ssl
-sudo install -o root -g root -m 0644 deploy/apache-vuln.freearchive.org.conf /etc/apache2/sites-available/vuln.freearchive.org.conf
-sudo a2dissite 000-default
-sudo a2ensite vuln.freearchive.org
-sudo apachectl configtest
-sudo systemctl reload apache2
-```
+## 10. Kontrolliertes Upgrade und Rollback (BCP-03)
 
-The certificate paths in the template assume Certbot/Let's Encrypt and must match the host.
+1. Timer und Publisher stoppen; aktuellen Commit, API-Policy und repräsentative
+   paginierte sowie `since`-Antworten als Test-Fixtures sichern.
+2. PostgreSQL, Kvrocks, Konfiguration und Ledger konsistent sichern.
+3. Kandidatenversion in einer Staging-Kopie **explizit** pinnen; niemals die
+   Produktions-Lockdatei vor erfolgreicher Abnahme ändern.
+4. Migration auf einer Backup-Kopie ausführen. Schema, BCP-03-Form, Sortierung,
+   `since`-Grenzverhalten, Pagination, Dumps, Well-known-Policy und BCP-05 validieren.
+5. Erst nach Review Lockdatei und Dokumentation im selben Commit ändern und ein kurzes
+   Wartungsfenster für Migration/Neustart nutzen.
 
-## 5. Mandatory rollout gates and timer activation
-
-The following gates are ordered and mandatory. Stop at the first failure. Keep
-the timer disabled throughout, and run collector commands with the production
-environment:
-
-```sh
-test "$(systemctl is-enabled vulnarchive-sync.timer 2>/dev/null || true)" = disabled
-run_collector() {
-  sudo -u vulnarchive sh -c \
-    'set -a; . /etc/vulnarchive/vulnarchive.env; set +a; exec /opt/vulnarchive/.venv/bin/fd-sightings "$@"' \
-    sh "$@"
-}
-```
-
-Run all gates in the same root shell so that the `run_collector` function and
-the IDs captured below remain available. The environment file must use
-shell-compatible `KEY=value` syntax as well as systemd `EnvironmentFile=`
-syntax; otherwise invoke the command with an equivalent, securely loaded
-environment.
-
-### Gate 1: local Vulnerability-Lookup connection
-
-Test the local instance, including authentication by the publication account.
-Both requests must return HTTP 2xx, and `/api/user/me` must identify the intended
-account:
-
-```sh
-curl --fail --silent --show-error http://127.0.0.1:10001/.well-known/api-policy.json | jq .
-VL_API_KEY=$(sudo sed -n 's/^VL_API_KEY=//p' /etc/vulnarchive/vulnarchive.env)
-curl --fail --silent --show-error -H "X-API-KEY: ${VL_API_KEY}" \
-  http://127.0.0.1:10001/api/user/me | jq .
-unset VL_API_KEY
-```
-
-### Gate 2: non-writing automatic plan
-
-This command is a dry plan and must complete successfully. Review all 20 results
-and their proposed operations before continuing:
-
-```sh
-run_collector plan-auto --limit 20 | tee /tmp/vulnarchive-plan.json
-jq -e '.count <= 20 and (.outcomes | type == "array")' /tmp/vulnarchive-plan.json
-```
-
-### Gate 3: stable instance UUID
-
-Set `VL_GENERIC_JSON` to the active Vulnerability-Lookup configuration file.
-The configured `VA_GNA_ORG_UUID` must be a UUID, must equal
-`local_instance_uuid`, and must equal the value backed up during the first
-deployment. Never replace the backup after publication merely to make this gate
-pass.
-
-```sh
-VL_GENERIC_JSON=/opt/vulnerability-lookup/config/generic.json
-ENV_UUID=$(sudo sed -n 's/^VA_GNA_ORG_UUID=//p' /etc/vulnarchive/vulnarchive.env)
-INSTANCE_UUID=$(sudo jq -er '.local_instance_uuid' "$VL_GENERIC_JSON")
-printf '%s\n' "$ENV_UUID" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
-test "$ENV_UUID" = "$INSTANCE_UUID"
-sudo test -s /etc/vulnarchive/local_instance_uuid || \
-  printf '%s\n' "$INSTANCE_UUID" | sudo tee /etc/vulnarchive/local_instance_uuid >/dev/null
-test "$INSTANCE_UUID" = "$(sudo cat /etc/vulnarchive/local_instance_uuid)"
-unset ENV_UUID INSTANCE_UUID
-```
-
-### Gate 4: publish exactly one approved test record
-
-Choose one archived candidate from the plan that creates a `new-advisory` or
-`context-and-sightings` record. An analyst must inspect its source, extracted
-content, relationships, record type, and archive rendering in the local review
-UI and explicitly approve it for this rollout. Ensure that this approved
-candidate is the first actionable, not-yet-published item shown by `plan-auto`.
-Then publish with a hard limit of one and capture the allocated ID:
-
-```sh
-run_collector publish-auto --limit 1 | tee /tmp/vulnarchive-test-publication.json
-GCVE_ID=$(jq -er '[.outcomes[].operations[] | select(.kind == "gcve" and (.status == 200 or .status == 201)) | .id] | select(length == 1) | .[0]' /tmp/vulnarchive-test-publication.json)
-test -n "$GCVE_ID"
-```
-
-Do not run `publish-auto` again during the rollout. The gate passes only when
-exactly one newly published GCVE ID was captured.
-
-### Gate 5: BCP-03 and dump
-
-The same ID and its VULNARCHIVE archive URL must occur in the public BCP-03
-response and in the published NDJSON dump:
-
-```sh
-curl --fail --silent --show-error 'https://vuln.freearchive.org/api/gcve/publication?per_page=100' -o /tmp/bcp03.json
-jq -e --arg id "$GCVE_ID" '.. | objects | select(.cveMetadata.vulnId? == $id or .cveMetadata.cveId? == $id)' /tmp/bcp03.json >/dev/null
-curl --fail --silent --show-error https://vuln.freearchive.org/dumps/gna-1988.ndjson -o /tmp/gna-1988.ndjson
-jq -e --arg id "$GCVE_ID" 'select(.cveMetadata.vulnId? == $id or .cveMetadata.cveId? == $id)' /tmp/gna-1988.ndjson >/dev/null
-```
-
-### Gate 6: BCP-05 validation
-
-Extract the one published record from BCP-03 and validate it with the current
-official GCVE BCP-05 validator. Warnings are failures for this rollout:
-
-```sh
-jq --arg id "$GCVE_ID" '.. | objects | select(.cveMetadata.vulnId? == $id or .cveMetadata.cveId? == $id)' /tmp/bcp03.json > /tmp/vulnarchive-test-record.json
-gcve-bcp-05-validator --fail-on-warning /tmp/vulnarchive-test-record.json
-```
-
-Use the executable name documented by the installed official validator if it
-differs; `--fail-on-warning` (or its exact equivalent) remains mandatory.
-
-### Gate 7: Sighting and archive URL
-
-Obtain the expected archive URL from the validated record. Confirm that it is an
-HTTPS URL below `/archive/`, is reachable, and that the Sighting API returns a
-Sighting for the test ID whose source is that URL:
-
-```sh
-ARCHIVE_URL=$(jq -er '[.. | objects | .url? | select(type == "string" and startswith("https://vuln.freearchive.org/archive/"))][0]' /tmp/vulnarchive-test-record.json)
-curl --fail --silent --show-error "$ARCHIVE_URL" >/dev/null
-curl --fail --silent --show-error \
-  "https://vuln.freearchive.org/api/sighting/?vulnerability=${GCVE_ID}" \
-  -o /tmp/vulnarchive-test-sightings.json
-jq -e --arg id "$GCVE_ID" --arg source "$ARCHIVE_URL" \
-  '.. | objects | select(.vulnerability? == $id and .source? == $source)' \
-  /tmp/vulnarchive-test-sightings.json >/dev/null
-```
-
-Also check the public site metadata before activation:
-
-```sh
-curl --fail https://vuln.freearchive.org/
-curl --fail https://vuln.freearchive.org/.well-known/security.txt
-```
-
-Only after gates 1 through 7 have succeeded, reject the shipped example API key
-and enable continuous operation:
-
-```sh
-sudo grep -Fq 'replace-with-publication-account-api-key' /etc/vulnarchive/vulnarchive.env && {
-  echo 'Refusing to enable timer: example API key is still configured.' >&2
-  exit 1
-}
-sudo systemctl enable --now vulnarchive-sync.timer
-systemctl is-enabled vulnarchive-sync.timer
-systemctl is-active vulnarchive-sync.timer
-```
-
-Run the separate, destructive acceptance check against a prepared test instance
-(not production). The instance must contain at least three seed records, have a
-1999 ID range for GNA 1988, expose its generated dump, and use credentials with
-reservation and publication permissions:
-
-```sh
-VL_URL=https://test-vuln.example \
-VL_API_KEY=replace-with-test-publication-key \
-VA_GNA_ORG_UUID=4e2abfbf-4a2a-4b76-a4e0-d77c18ba156c \
-python3 deploy/verify-bcp03.py --allow-write
-```
-
-This check validates the BCP-03 envelope and records, invalid parameters and
-limits, two-page continuity, historical-ID backfill using current publication
-time, both sides of the `since` boundary, and consistency with
-`dumps/gna-1988.ndjson`. The static publication fixture is in
-`tests/bcp03/historical-record.json`. A successful run, in addition to the
-public checks above and the official BCP-05 validator, is a mandatory prerequisite
-for enabling the production timer:
-
-```sh
-sudo systemctl enable --now vulnarchive-sync.timer
-```
-
-The `security.txt` response should declare the GCVE endpoint, and the GCVE directory should expose `https://vuln.freearchive.org` as the GNA 1988 pull API.
+Rollback: Publisher stoppen, beide Dienste anhalten, **PostgreSQL und Kvrocks gemeinsam**
+auf den Vor-Upgrade-Snapshot zurücksetzen, den in `INSTALLED_COMMIT` gesicherten Commit
+v2.13.0 auschecken, dessen Lock-Dependencies installieren, alte Konfiguration einspielen
+und die Abnahmetests wiederholen. Ein Code-Downgrade gegen ein vorwärts migriertes Schema
+ist verboten. Bei jeder Abweichung bleibt Publikation deaktiviert; so kann ein Update das
+BCP-03-Verhalten nicht unkontrolliert ändern.

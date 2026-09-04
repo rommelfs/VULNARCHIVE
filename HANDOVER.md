@@ -2,6 +2,8 @@
 
 Stand: 4. September 2026
 Projektversion: 0.2.0
+Verbindliche Vulnerability-Lookup-Version: **v2.13.0** (offizieller Release; aufgelösten
+Produktions-Commit zusätzlich aus `INSTALLED_COMMIT` sichern)
 GCVE Numbering Authority: GNA 1988 – VULNARCHIVE
 Öffentliche Zieladresse: <https://vuln.freearchive.org>
 
@@ -107,6 +109,21 @@ Full Disclosure Archive / RSS
        Vulnerability-Lookup
     API · BCP-03 · Dumps · Website
 ```
+
+## Festgelegte Vulnerability-Lookup-Basis
+
+Die freigegebene Produktionsbasis ist ausschließlich Vulnerability-Lookup **v2.13.0**.
+Sie ist in `deploy/vulnerability-lookup.version` gesperrt und wird mit
+`deploy/install-vulnerability-lookup.sh` installiert. Für genau diese Version werden
+`/api/gcve/publication`, `since`-Synchronisation, Pagination, GNA-Dumps und
+`/.well-known/api-policy.json` vorausgesetzt und abgenommen. „Aktuell“ in älteren
+Notizen bedeutet ausdrücklich nicht, ungeprüft den neuesten Upstream-Stand einzusetzen.
+
+Web/API (`127.0.0.1:10001`) und Hintergrund-Worker haben getrennte systemd-Units; sie
+benötigen PostgreSQL, Redis/Valkey und Kvrocks. Initialisierung, vollständiges Mapping
+der acht Generic-Config-Werte, Least-Privilege-Publikationskonto sowie verpflichtende
+Upgrade-/Rollback-Prüfungen stehen in `DEPLOYMENT.md`. Ein Versionswechsel darf erst
+nach Staging-Abnahme des BCP-03-Verhaltens erfolgen.
 
 Produktionsaufteilung:
 
@@ -289,7 +306,8 @@ Die GNA-Registrierung selbst ist online und nennt Website sowie Dump-URL. Der ei
 
 1. Zugriff auf den Server von `vuln.freearchive.org` herstellen.
 2. Apache-Standardseite deaktivieren.
-3. Aktuelle Vulnerability-Lookup-Version installieren und konfigurieren.
+3. Die festgelegte Vulnerability-Lookup-Version v2.13.0 mit den Artefakten unter
+   `deploy/` installieren und konfigurieren (nicht `main`/`latest`).
 4. `local_instance_name` auf `gna-1988` setzen.
 5. Stabile Instanz-/GNA-UUID festlegen und sichern.
 6. Publikationskonto mit minimal erforderlichen API-Rechten erstellen.
