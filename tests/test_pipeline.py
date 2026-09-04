@@ -213,11 +213,12 @@ class ParserTests(unittest.TestCase):
                 lookup = VulnerabilityLookup(client, "https://vulnerability.example", "secret")
                 policy = PublicationPolicy(min_body_chars=20)
                 first = execute_automatic_publication(store, lookup, policy)
-                self.assertEqual(len(client.requests), 4)
+                self.assertEqual(len(client.requests), 3)
                 self.assertTrue(any(op.get("id") == "GCVE-1988-2026-0001" for op in first[0]["operations"]))
                 execute_automatic_publication(store, lookup, policy)
-                self.assertEqual(len(client.requests), 4)
+                self.assertEqual(len(client.requests), 3)
                 self.assertEqual(len(store.publication_rows()), 3)
+                self.assertEqual(store.dump_gcve_records()[0]["cveMetadata"]["vulnId"], "GCVE-1988-2026-0001")
             finally:
                 store.close()
 
