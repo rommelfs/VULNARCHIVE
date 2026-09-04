@@ -197,7 +197,20 @@ The target instance should use the settings in `config/vulnerability-lookup.gene
 
 With a current Vulnerability-Lookup release this makes local records available through the BCP-03 endpoint `/api/gcve/publication`. The GNA directory's `gcve_pull_api` should point to `https://vuln.freearchive.org`.
 
-The VULNARCHIVE web service also exposes its successfully published local records through the public, read-only `GET /api/gcve/publication` endpoint. Its response is the BCP-03 JSON array itself (without an envelope or pagination metadata). `page` defaults to 1 and `per_page` to 30 (maximum 100); consumers continue requesting pages until an array contains fewer than `per_page` records. Optional filters are `since`, `product`, `assigner`, and `cwe`; sorting is controlled by `sort_order=asc|desc` and `date_sort=published|updated|reserved`.
+### Publication timestamps and ordering
+
+The local publication ledger keeps three independent UTC timestamps: `reserved_at`
+for local GCVE-ID allocation, `published_at` for the first successful public
+publication, and `updated_at` for the most recent content change. They are serialized
+as ISO-8601 values ending in `Z`. A historical source date never initializes
+`published_at`; it remains provenance in `x_vulnarchive.sourcePublishedAt`.
+
+Publication queries accept `date_sort=published`, `date_sort=updated`, and
+`date_sort=reserved`. An omitted or empty `date_sort` defaults to `updated`. Ordering
+is newest first, with the GCVE ID ascending as a stable tie-breaker. The incremental
+filter is strict and means `published_at > since OR updated_at > since`; a record
+exactly at the boundary is therefore excluded. Input timestamps must be ISO-8601 and
+include a timezone.
 
 ## Matching policy
 
