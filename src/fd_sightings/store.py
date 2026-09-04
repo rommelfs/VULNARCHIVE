@@ -471,3 +471,11 @@ class Store:
             item["response"] = json.loads(str(item.pop("response_json")))
             result.append(item)
         return result
+
+    def published_gcve_records(self) -> list[dict[str, object]]:
+        """Return complete records successfully published by this instance."""
+        rows = self.db.execute(
+            """SELECT payload_json FROM automatic_publications
+            WHERE kind='gcve' AND status='published' AND gcve_id LIKE 'GCVE-1988-%'"""
+        ).fetchall()
+        return [json.loads(str(row[0])) for row in rows]
