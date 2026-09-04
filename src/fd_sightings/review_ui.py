@@ -77,6 +77,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._connection(refresh=True)
         elif parsed.path == "/publish":
             self._publication_dashboard()
+        elif parsed.path == "/api/gcve/publication":
+            from .public_api import publication_response
+            status, body = publication_response(self.server.store, parsed.query)
+            self._send(body, status, "application/json; charset=utf-8")
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
