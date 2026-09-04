@@ -1,0 +1,17 @@
+[Unit]
+Description=Import and publish new VULNARCHIVE mailing-list entries
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vulnarchive
+Group=vulnarchive
+WorkingDirectory=/opt/vulnarchive
+EnvironmentFile=/etc/vulnarchive/vulnarchive.env
+ExecStart=/opt/vulnarchive/.venv/bin/fd-sightings sync --retry-failed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vulnarchive/data
