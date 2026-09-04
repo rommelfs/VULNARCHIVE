@@ -75,6 +75,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._connection(refresh=True)
         elif parsed.path == "/publish":
             self._publication_dashboard()
+        elif parsed.path == "/api/gcve/publication":
+            self._bcp03_publications(params)
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
@@ -210,16 +212,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._send(_layout("Automatic publication", content))
 
     def _publish_automatic(self, data: dict[str, list[str]]) -> None:
-        if not self.server.lookup.connection_status(refresh=True).get("authenticated"):
-            self._send(_layout("Connection required", '<div class="panel"><h1>Authenticated connection required</h1><p><a href="/connection">Connection settings</a></p></div>'), 401)
-            return
         from .policy import PublicationPolicy
         from .publication import execute_automatic_publication
         try:
             limit = max(0, int(data.get("limit", ["0"])[0] or 0))
             outcomes = execute_automatic_publication(
                 self.server.store,
-                self.server.lookup,
                 PublicationPolicy.from_env(),
                 limit=limit,
                 retry_failed=data.get("retry_failed", [""])[0] == "1",
@@ -230,6 +228,24 @@ class ReviewHandler(BaseHTTPRequestHandler):
         import json
         rendered = _e(json.dumps(outcomes, ensure_ascii=False, indent=2))
         self._send(_layout("Publication completed", f'<div class="panel"><h1>Publication run completed</h1><p>Processed {_e(len(outcomes))} archived observations.</p><p><a href="/publish">Back to publication dashboard</a></p><pre>{rendered}</pre></div>'))
+
+    def _bcp03_publications(self, params: dict[str, list[str]]) -> None:
+        """Expose committed local records through the BCP-03 pull shape."""
+        import json
+        try:
+            page = int(params.get("page", ["1"])[0])
+            per_page = int(params.get("per_page", ["100"])[0])
+            if page < 1 or not 1 <= per_page <= 1000:
+                raise ValueError
+        except ValueError:
+            self._send(b'{"error":"invalid pagination"}', 400, "application/json")
+            return
+        records = self.server.store.bcp03_publications()
+        start = (page - 1) * per_page
+        body = json.dumps({"data": records[start:start + per_page], "metadata": {
+            "page": page, "per_page": per_page, "count": len(records)
+        }}, ensure_ascii=False).encode("utf-8")
+        self._send(body, content_type="application/json")
 
     def _connection(self, refresh: bool = False) -> None:
         connection = self.server.lookup.connection_status(refresh=refresh)

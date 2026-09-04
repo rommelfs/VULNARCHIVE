@@ -51,6 +51,22 @@ CREATE TABLE IF NOT EXISTS automatic_publications (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (source_url, publication_key)
 );
+CREATE TABLE IF NOT EXISTS gcve_reservations (
+    source_url TEXT NOT NULL,
+    publication_key TEXT NOT NULL,
+    gcve_id TEXT NOT NULL UNIQUE,
+    gna_id INTEGER NOT NULL,
+    publication_year INTEGER NOT NULL,
+    serial INTEGER NOT NULL,
+    reserved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_url, publication_key),
+    UNIQUE (gna_id, publication_year, serial)
+);
+CREATE TABLE IF NOT EXISTS gcve_records (
+    gcve_id TEXT PRIMARY KEY,
+    record_json TEXT NOT NULL,
+    published_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -236,6 +252,85 @@ class Store:
             ),
         )
         self.db.commit()
+
+    def reserve_gcve(self, source_url: str, publication_key: str, gna_id: int, year: int) -> str:
+        """Reserve an identifier locally, serializing allocators with BEGIN IMMEDIATE."""
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            existing = self.db.execute(
+                "SELECT gcve_id FROM gcve_reservations WHERE source_url=? AND publication_key=?",
+                (source_url, publication_key),
+            ).fetchone()
+            if existing:
+                return str(existing[0])
+            serial = int(self.db.execute(
+                "SELECT COALESCE(MAX(serial), 0) + 1 FROM gcve_reservations WHERE gna_id=? AND publication_year=?",
+                (gna_id, year),
+            ).fetchone()[0])
+            gcve_id = f"GCVE-{gna_id}-{year}-{serial:04d}"
+            self.db.execute(
+                """INSERT INTO gcve_reservations
+                (source_url, publication_key, gcve_id, gna_id, publication_year, serial)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (source_url, publication_key, gcve_id, gna_id, year, serial),
+            )
+            self._upsert_publication(
+                source_url, publication_key, "gcve", gcve_id=gcve_id, status="reserved"
+            )
+            return gcve_id
+
+    def publish_gcve(
+        self, source_url: str, publication_key: str, gcve_id: str, record: object
+    ) -> None:
+        """Atomically make a record public and mark its ledger entry published."""
+        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            reservation = self.db.execute(
+                "SELECT gcve_id FROM gcve_reservations WHERE source_url=? AND publication_key=?",
+                (source_url, publication_key),
+            ).fetchone()
+            if not reservation or reservation[0] != gcve_id:
+                raise ValueError(f"{gcve_id} is not reserved for this publication")
+            self.db.execute(
+                "INSERT OR REPLACE INTO gcve_records (gcve_id, record_json) VALUES (?, ?)",
+                (gcve_id, encoded),
+            )
+            self._upsert_publication(
+                source_url, publication_key, "gcve", gcve_id=gcve_id,
+                status="published", payload=record,
+            )
+
+    def _upsert_publication(
+        self, source_url: str, publication_key: str, kind: str, *, target_id: str = "",
+        gcve_id: str = "", status: str, payload: object | None = None,
+        response: object | None = None, error: str = "",
+    ) -> None:
+        """Write a ledger row without committing, for callers managing a transaction."""
+        row = self.db.execute(
+            "SELECT payload_json, response_json FROM automatic_publications WHERE source_url=? AND publication_key=?",
+            (source_url, publication_key),
+        ).fetchone()
+        old_payload, old_response = row if row else ("{}", "{}")
+        self.db.execute(
+            """INSERT INTO automatic_publications
+            (source_url, publication_key, kind, target_id, gcve_id, status, payload_json, response_json, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_url, publication_key) DO UPDATE SET
+              kind=excluded.kind, target_id=excluded.target_id,
+              gcve_id=CASE WHEN excluded.gcve_id='' THEN automatic_publications.gcve_id ELSE excluded.gcve_id END,
+              status=excluded.status, payload_json=excluded.payload_json,
+              response_json=excluded.response_json, error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
+            (source_url, publication_key, kind, target_id, gcve_id, status,
+             json.dumps(payload) if payload is not None else old_payload,
+             json.dumps(response) if response is not None else old_response, error[:4000]),
+        )
+
+    def bcp03_publications(self) -> list[dict[str, object]]:
+        """Return committed records in the order expected by a BCP-03 pull endpoint."""
+        return [json.loads(row[0]) for row in self.db.execute(
+            "SELECT record_json FROM gcve_records ORDER BY gcve_id"
+        )]
 
     def automatic_candidates(self, limit: int = 0) -> list[dict[str, object]]:
         """Return relevant archived observations; the publication ledger provides idempotency."""
