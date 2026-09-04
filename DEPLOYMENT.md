@@ -41,7 +41,6 @@ sudo install -o root -g root -m 0644 deploy/vulnarchive-web.service /etc/systemd
 sudo install -o root -g root -m 0644 deploy/vulnarchive-sync.service /etc/systemd/system/
 sudo install -o root -g root -m 0644 deploy/vulnarchive-sync.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl disable --now vulnarchive-sync.timer
 sudo systemctl enable --now vulnarchive-web.service
 ```
 
@@ -227,6 +226,28 @@ systemctl is-enabled vulnarchive-sync.timer
 systemctl is-active vulnarchive-sync.timer
 ```
 
-The timer now imports the current RSS feed and applies the automatic policy every
-15 minutes. Historical backfill is a separate, explicitly supervised operation;
-do not combine it with the initial rollout gates.
+Run the separate, destructive acceptance check against a prepared test instance
+(not production). The instance must contain at least three seed records, have a
+1999 ID range for GNA 1988, expose its generated dump, and use credentials with
+reservation and publication permissions:
+
+```sh
+VL_URL=https://test-vuln.example \
+VL_API_KEY=replace-with-test-publication-key \
+VA_GNA_ORG_UUID=4e2abfbf-4a2a-4b76-a4e0-d77c18ba156c \
+python3 deploy/verify-bcp03.py --allow-write
+```
+
+This check validates the BCP-03 envelope and records, invalid parameters and
+limits, two-page continuity, historical-ID backfill using current publication
+time, both sides of the `since` boundary, and consistency with
+`dumps/gna-1988.ndjson`. The static publication fixture is in
+`tests/bcp03/historical-record.json`. A successful run, in addition to the
+public checks above and the official BCP-05 validator, is a mandatory prerequisite
+for enabling the production timer:
+
+```sh
+sudo systemctl enable --now vulnarchive-sync.timer
+```
+
+The `security.txt` response should declare the GCVE endpoint, and the GCVE directory should expose `https://vuln.freearchive.org` as the GNA 1988 pull API.
