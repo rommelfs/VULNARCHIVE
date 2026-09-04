@@ -161,12 +161,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {"plan-auto", "publish-auto"}:
             from .policy import PublicationPolicy
             from .publication import execute_automatic_publication
-            _, lookup = _clients(args)
-            if args.command == "publish-auto" and not lookup.api_key:
-                raise RuntimeError("VL_API_KEY is required for automatic publication")
             outcomes = execute_automatic_publication(
                 store,
-                lookup,
                 PublicationPolicy.from_env(),
                 limit=args.limit,
                 dry_run=args.command == "plan-auto",
@@ -199,8 +195,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "rss":
             _process(args, parse_rss(source_client.get_text(args.feed)), store, source_client, lookup)
         elif args.command == "sync":
-            if not lookup.api_key:
-                raise RuntimeError("VL_API_KEY is required for automatic synchronization")
             urls = parse_rss(source_client.get_text(args.feed))
             if args.limit:
                 urls = urls[: args.limit]
@@ -217,7 +211,6 @@ def main(argv: list[str] | None = None) -> int:
             from .publication import execute_automatic_publication
             publications = execute_automatic_publication(
                 store,
-                lookup,
                 PublicationPolicy.from_env(),
                 limit=args.limit,
                 retry_failed=args.retry_failed,

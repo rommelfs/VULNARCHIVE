@@ -73,7 +73,10 @@ For the continuous Phase-2 operation, import the current feed and immediately ap
 fd-sightings sync
 ```
 
-This command requires `VL_API_KEY`. It is suitable for a periodic service or scheduler; already completed publications are skipped.
+This command does not require `VL_API_KEY`: GCVE identifiers and records are
+reserved and published transactionally in the local SQLite store. An external
+Vulnerability-Lookup connection remains optional for resolving foreign IDs and
+finding candidates; already completed publications are skipped.
 
 Export the review queues:
 

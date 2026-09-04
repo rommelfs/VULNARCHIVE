@@ -55,35 +55,21 @@ CREATE TABLE IF NOT EXISTS automatic_publications (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (source_url, publication_key)
 );
-CREATE TABLE IF NOT EXISTS gcve_records (
-    vuln_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS gcve_reservations (
     source_url TEXT NOT NULL,
-    record_json TEXT NOT NULL,
-    record_type TEXT NOT NULL,
-    assigner TEXT NOT NULL,
-    reserved_at TEXT NOT NULL,
-    published_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    product_normalized TEXT,
-    vendor_normalized TEXT,
-    cwe_json TEXT NOT NULL DEFAULT '[]'
+    publication_key TEXT NOT NULL,
+    gcve_id TEXT NOT NULL UNIQUE,
+    gna_id INTEGER NOT NULL,
+    publication_year INTEGER NOT NULL,
+    serial INTEGER NOT NULL,
+    reserved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_url, publication_key),
+    UNIQUE (gna_id, publication_year, serial)
 );
-CREATE INDEX IF NOT EXISTS gcve_records_chronological_idx
-    ON gcve_records (updated_at, published_at, vuln_id);
-CREATE INDEX IF NOT EXISTS gcve_records_assigner_idx
-    ON gcve_records (assigner, updated_at, vuln_id);
-CREATE INDEX IF NOT EXISTS gcve_records_type_idx
-    ON gcve_records (record_type, updated_at, vuln_id);
-CREATE INDEX IF NOT EXISTS gcve_records_product_idx
-    ON gcve_records (product_normalized, updated_at, vuln_id);
-CREATE INDEX IF NOT EXISTS gcve_records_vendor_idx
-    ON gcve_records (vendor_normalized, updated_at, vuln_id);
-CREATE INDEX IF NOT EXISTS gcve_records_cwe_idx
-    ON gcve_records (cwe_json, updated_at, vuln_id);
-CREATE TABLE IF NOT EXISTS gcve_year_sequences (
-    year INTEGER PRIMARY KEY CHECK (year BETWEEN 1000 AND 9999),
-    last_serial INTEGER NOT NULL CHECK (last_serial >= 0),
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS gcve_records (
+    gcve_id TEXT PRIMARY KEY,
+    record_json TEXT NOT NULL,
+    published_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -496,58 +482,84 @@ class Store:
         )
         self.db.commit()
 
-    @staticmethod
-    def _utc_iso(value: datetime) -> str:
-        if value.tzinfo is None:
-            raise ValueError("timestamps must include a timezone")
-        return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    def reserve_gcve(self, source_url: str, publication_key: str, gna_id: int, year: int) -> str:
+        """Reserve an identifier locally, serializing allocators with BEGIN IMMEDIATE."""
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            existing = self.db.execute(
+                "SELECT gcve_id FROM gcve_reservations WHERE source_url=? AND publication_key=?",
+                (source_url, publication_key),
+            ).fetchone()
+            if existing:
+                return str(existing[0])
+            serial = int(self.db.execute(
+                "SELECT COALESCE(MAX(serial), 0) + 1 FROM gcve_reservations WHERE gna_id=? AND publication_year=?",
+                (gna_id, year),
+            ).fetchone()[0])
+            gcve_id = f"GCVE-{gna_id}-{year}-{serial:04d}"
+            self.db.execute(
+                """INSERT INTO gcve_reservations
+                (source_url, publication_key, gcve_id, gna_id, publication_year, serial)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (source_url, publication_key, gcve_id, gna_id, year, serial),
+            )
+            self._upsert_publication(
+                source_url, publication_key, "gcve", gcve_id=gcve_id, status="reserved"
+            )
+            return gcve_id
 
-    @staticmethod
-    def _normalize_stored_timestamp(value: str) -> str:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return Store._utc_iso(parsed)
+    def publish_gcve(
+        self, source_url: str, publication_key: str, gcve_id: str, record: object
+    ) -> None:
+        """Atomically make a record public and mark its ledger entry published."""
+        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            reservation = self.db.execute(
+                "SELECT gcve_id FROM gcve_reservations WHERE source_url=? AND publication_key=?",
+                (source_url, publication_key),
+            ).fetchone()
+            if not reservation or reservation[0] != gcve_id:
+                raise ValueError(f"{gcve_id} is not reserved for this publication")
+            self.db.execute(
+                "INSERT OR REPLACE INTO gcve_records (gcve_id, record_json) VALUES (?, ?)",
+                (gcve_id, encoded),
+            )
+            self._upsert_publication(
+                source_url, publication_key, "gcve", gcve_id=gcve_id,
+                status="published", payload=record,
+            )
 
-    @staticmethod
-    def _parse_timestamp(value: str) -> str:
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("since must be an ISO-8601 timestamp") from exc
-        if parsed.tzinfo is None:
-            raise ValueError("since must include a timezone")
-        return Store._utc_iso(parsed)
+    def _upsert_publication(
+        self, source_url: str, publication_key: str, kind: str, *, target_id: str = "",
+        gcve_id: str = "", status: str, payload: object | None = None,
+        response: object | None = None, error: str = "",
+    ) -> None:
+        """Write a ledger row without committing, for callers managing a transaction."""
+        row = self.db.execute(
+            "SELECT payload_json, response_json FROM automatic_publications WHERE source_url=? AND publication_key=?",
+            (source_url, publication_key),
+        ).fetchone()
+        old_payload, old_response = row if row else ("{}", "{}")
+        self.db.execute(
+            """INSERT INTO automatic_publications
+            (source_url, publication_key, kind, target_id, gcve_id, status, payload_json, response_json, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_url, publication_key) DO UPDATE SET
+              kind=excluded.kind, target_id=excluded.target_id,
+              gcve_id=CASE WHEN excluded.gcve_id='' THEN automatic_publications.gcve_id ELSE excluded.gcve_id END,
+              status=excluded.status, payload_json=excluded.payload_json,
+              response_json=excluded.response_json, error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
+            (source_url, publication_key, kind, target_id, gcve_id, status,
+             json.dumps(payload) if payload is not None else old_payload,
+             json.dumps(response) if response is not None else old_response, error[:4000]),
+        )
 
-    def gcve_records(self, *, date_sort: str = "", since: str | None = None) -> list[dict[str, object]]:
-        """Return published GCVE records in a stable temporal order.
-
-        The default is ``updated``. All orders are newest first and use the
-        GCVE ID ascending as a deterministic tie-breaker. ``since`` is strict
-        and independent of the selected ordering.
-        """
-        sort = date_sort or "updated"
-        if sort not in {"published", "updated", "reserved"}:
-            raise ValueError("date_sort must be published, updated, reserved, or empty")
-        column = f"{sort}_at"
-        params: list[str] = []
-        where = "kind='gcve' AND status='published'"
-        if since is not None:
-            boundary = self._parse_timestamp(since)
-            where += " AND (published_at > ? OR updated_at > ?)"
-            params.extend((boundary, boundary))
-        self.db.row_factory = sqlite3.Row
-        rows = self.db.execute(
-            f"SELECT * FROM automatic_publications WHERE {where} "
-            f"ORDER BY {column} DESC, gcve_id ASC", params,
-        ).fetchall()
-        result = []
-        for row in rows:
-            item = dict(row)
-            item["record"] = json.loads(str(item.pop("payload_json")))
-            item.pop("response_json")
-            result.append(item)
-        return result
+    def bcp03_publications(self) -> list[dict[str, object]]:
+        """Return committed records in the order expected by a BCP-03 pull endpoint."""
+        return [json.loads(row[0]) for row in self.db.execute(
+            "SELECT record_json FROM gcve_records ORDER BY gcve_id"
+        )]
 
     def automatic_candidates(self, limit: int = 0) -> list[dict[str, object]]:
         """Return relevant archived observations; the publication ledger provides idempotency."""
