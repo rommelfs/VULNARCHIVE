@@ -50,6 +50,25 @@ Run one controlled dry plan before the first publication:
 sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
 ```
 
+Before any controlled single publication, the read-only deployment preflight is
+mandatory. Pass the `generic.json` actually used by Vulnerability-Lookup; the
+script compares it with the checked-in reference and
+`/etc/vulnarchive/vulnarchive.env`, then performs unauthenticated `GET` requests
+against the public API policy, GCVE publication endpoint, and expected
+`gna-1988.ndjson` dump:
+
+```sh
+cd /opt/vulnarchive
+sudo -u vulnarchive ./deploy/check-vulnerability-lookup.py \
+  --lookup-config /opt/vulnerability-lookup/config/generic.json
+```
+
+The command must finish with `READY` before proceeding. It does not read or send
+`VL_API_KEY`, reserve vulnerability IDs, or publish records. If the effective
+configuration file is not locally accessible, omit `--lookup-config` to run the
+reduced public-metadata and endpoint checks; that reduced check does not replace
+the mandatory full check before publication.
+
 ## 4. Configure Apache
 
 Enable the required modules, install the supplied virtual host, and reload Apache:
