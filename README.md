@@ -197,6 +197,12 @@ The target instance should use the settings in `config/vulnerability-lookup.gene
 
 With a current Vulnerability-Lookup release this makes local records available through the BCP-03 endpoint `/api/gcve/publication`. The GNA directory's `gcve_pull_api` should point to `https://vuln.freearchive.org`.
 
+The archive service additionally exposes `GET /dumps/gna-1988.ndjson`. It pages
+through that canonical publication endpoint, filters for published
+`GCVE-1988-*` records, sorts them deterministically on disk, and streams compact
+UTF-8 NDJSON without a response envelope. Apache routes this one dump path to
+the archive service.
+
 ## Matching policy
 
 - An explicit identifier that resolves receives confidence `1.0`.
