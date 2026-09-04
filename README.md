@@ -73,7 +73,10 @@ For the continuous Phase-2 operation, import the current feed and immediately ap
 fd-sightings sync
 ```
 
-This command requires `VL_API_KEY`. It is suitable for a periodic service or scheduler; already completed publications are skipped.
+This command does not require `VL_API_KEY`: GCVE identifiers and records are
+reserved and published transactionally in the local SQLite store. An external
+Vulnerability-Lookup connection remains optional for resolving foreign IDs and
+finding candidates; already completed publications are skipped.
 
 Export the review queues:
 
@@ -195,7 +198,10 @@ The target instance should use the settings in `config/vulnerability-lookup.gene
 }
 ```
 
-With a current Vulnerability-Lookup release this makes local records available through the BCP-03 endpoint `/api/gcve/publication`. The GNA directory's `gcve_pull_api` should point to `https://vuln.freearchive.org`.
+The review service exposes committed local records directly through the BCP-03
+endpoint `/api/gcve/publication`; no round trip through Vulnerability-Lookup is
+part of reservation or publication. The GNA directory's `gcve_pull_api` should
+point to `https://vuln.freearchive.org`.
 
 ### Publication timestamps and ordering
 

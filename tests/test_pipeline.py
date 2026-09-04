@@ -9,8 +9,7 @@ from fd_sightings.models import Match
 from fd_sightings.store import Store
 from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
-from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url
-from fd_sightings.public_api import publication_response
+from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
 from fd_sightings.cli import make_parser
 
 
@@ -20,21 +19,6 @@ class FakeClient:
 
     def request(self, url, **kwargs):
         return 200, '{"login":"analyst"}', {}
-
-
-class FakePublishingClient:
-    def __init__(self):
-        self.requests = []
-
-    def request(self, url, **kwargs):
-        self.requests.append((url, kwargs))
-        if "/api/cna/cve-id?" in url:
-            return 200, '{"cve_ids":[{"vuln_id":"GCVE-1988-2026-0001"}]}', {}
-        if "/api/cna/cve/" in url:
-            return 200, '{"message":"created"}', {}
-        if "/api/sighting/" in url:
-            return 201, '{"data":[{"uuid":"00000000-0000-4000-8000-000000000001"}]}', {}
-        raise AssertionError(url)
 
 
 MESSAGE_HTML = """
@@ -248,8 +232,7 @@ class ParserTests(unittest.TestCase):
                 message = parse_message(MESSAGE_HTML, "https://seclists.org/fulldisclosure/2026/Sep/27")
                 result = extract(message)
                 store.save(message, result, [Match("CVE-2026-77939", "explicit-id", 1.0, "Flextype")])
-                lookup = VulnerabilityLookup(FakeClient(), "https://vulnerability.example", "secret")
-                outcomes = execute_automatic_publication(store, lookup, PublicationPolicy(min_body_chars=20), dry_run=True)
+                outcomes = execute_automatic_publication(store, PublicationPolicy(min_body_chars=20), dry_run=True)
                 self.assertEqual(len(outcomes), 1)
                 self.assertEqual(store.publication_rows(), [])
                 self.assertTrue(any(item["kind"] == "gcve" for item in outcomes[0]["operations"]))
@@ -263,18 +246,35 @@ class ParserTests(unittest.TestCase):
                 message = parse_message(MESSAGE_HTML, "https://seclists.org/fulldisclosure/2026/Sep/27")
                 result = extract(message)
                 store.save(message, result, [Match("CVE-2026-77939", "explicit-id", 1.0, "Flextype")])
-                client = FakePublishingClient()
-                lookup = VulnerabilityLookup(client, "https://vulnerability.example", "secret")
                 policy = PublicationPolicy(min_body_chars=20)
-                first = execute_automatic_publication(store, lookup, policy)
-                self.assertEqual(len(client.requests), 3)
+                first = execute_automatic_publication(store, policy)
                 self.assertTrue(any(op.get("id") == "GCVE-1988-2026-0001" for op in first[0]["operations"]))
-                execute_automatic_publication(store, lookup, policy)
-                self.assertEqual(len(client.requests), 3)
+                execute_automatic_publication(store, policy)
                 self.assertEqual(len(store.publication_rows()), 3)
-                self.assertEqual(store.dump_gcve_records()[0]["cveMetadata"]["vulnId"], "GCVE-1988-2026-0001")
+                records = store.bcp03_publications()
+                self.assertEqual(records[0]["cveMetadata"]["vulnId"], "GCVE-1988-2026-0001")
+                validate_gcve_record(records[0])
             finally:
                 store.close()
+
+    def test_local_reservation_is_reused_and_record_ledger_commit_together(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "transaction.sqlite")
+            try:
+                first = store.reserve_gcve("source", "gcve:advisory", 1988, 2026)
+                repeated = store.reserve_gcve("source", "gcve:advisory", 1988, 2026)
+                self.assertEqual(first, repeated)
+                self.assertEqual(first, "GCVE-1988-2026-0001")
+                with self.assertRaises(ValueError):
+                    store.publish_gcve("source", "gcve:advisory", "GCVE-1988-2026-9999", {})
+                self.assertEqual(store.bcp03_publications(), [])
+                self.assertEqual(store.publication("source", "gcve:advisory")["status"], "reserved")
+            finally:
+                store.close()
+
+    def test_invalid_bcp05_record_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "BCP-05-1.7"):
+            validate_gcve_record({"dataType": "CVE_RECORD"})
 
     def test_publication_limit_skips_completed_old_entries(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -288,11 +288,8 @@ class ParserTests(unittest.TestCase):
                 store.save(second, result, [match])
                 key = "sighting:CVE-2026-77939:published-proof-of-concept"
                 store.save_publication(first.source_url, key, "sighting", target_id=match.vulnerability_id, status="published")
-                client = FakePublishingClient()
-                lookup = VulnerabilityLookup(client, "https://vulnerability.example", "secret")
                 policy = PublicationPolicy(publish_context_records=False, min_body_chars=20)
-                outcomes = execute_automatic_publication(store, lookup, policy, limit=1)
-                self.assertEqual(len(client.requests), 1)
+                outcomes = execute_automatic_publication(store, policy, limit=1)
                 self.assertEqual(outcomes[0]["plan"]["source_url"], second.source_url)
             finally:
                 store.close()

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import json
-import sqlite3
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from .http import HTTPError
 from .policy import PublicationPlan, PublicationPolicy, plan_observation
 from .store import Store
-from .vulnerability_lookup import VulnerabilityLookup
 
 
 def _published(value: object) -> datetime:
@@ -162,9 +159,52 @@ def build_gcve_record(
     }
 
 
+def validate_gcve_record(record: dict[str, Any]) -> None:
+    """Validate the BCP-05 1.7 fields emitted by :func:`build_gcve_record`.
+
+    Validation deliberately happens at the publication boundary so malformed or
+    partially built records can never enter the BCP-03 publication set.
+    """
+    errors: list[str] = []
+    metadata = record.get("cveMetadata")
+    containers = record.get("containers")
+    cna = containers.get("cna") if isinstance(containers, dict) else None
+    if record.get("dataType") != "CVE_RECORD":
+        errors.append("dataType must be CVE_RECORD")
+    if record.get("dataVersion") != "5.2":
+        errors.append("dataVersion must be 5.2")
+    if not isinstance(metadata, dict):
+        errors.append("cveMetadata is required")
+        metadata = {}
+    vuln_id = str(metadata.get("vulnId", ""))
+    if not re.fullmatch(r"GCVE-[1-9][0-9]*-[0-9]{4}-[0-9]{4,19}", vuln_id):
+        errors.append("cveMetadata.vulnId is not a valid GCVE identifier")
+    for field in ("state", "assignerOrgId", "assignerShortName", "datePublished", "dateUpdated"):
+        if not metadata.get(field):
+            errors.append(f"cveMetadata.{field} is required")
+    if metadata.get("state") != "PUBLISHED":
+        errors.append("cveMetadata.state must be PUBLISHED")
+    if not isinstance(cna, dict):
+        errors.append("containers.cna is required")
+        cna = {}
+    for field in ("providerMetadata", "descriptions", "affected", "references", "x_gcve"):
+        if not cna.get(field):
+            errors.append(f"containers.cna.{field} is required")
+    extensions = cna.get("x_gcve")
+    if isinstance(extensions, list) and extensions:
+        extension = extensions[0]
+        if not isinstance(extension, dict) or extension.get("vulnId") != vuln_id:
+            errors.append("containers.cna.x_gcve vulnId must match cveMetadata.vulnId")
+        if not isinstance(extension, dict) or extension.get("recordType") not in {"advisory", "analysis", "reference"}:
+            errors.append("containers.cna.x_gcve recordType is invalid")
+        if not isinstance(extension, dict) or not isinstance(extension.get("relationships"), list):
+            errors.append("containers.cna.x_gcve relationships must be an array")
+    if errors:
+        raise ValueError("BCP-05-1.7 validation failed: " + "; ".join(errors))
+
+
 def _publish_sighting(
     store: Store,
-    lookup: VulnerabilityLookup,
     row: dict[str, object],
     plan: PublicationPlan,
     target: str,
@@ -185,33 +225,11 @@ def _publish_sighting(
     if dry_run:
         current.append({"kind": "sighting", "target": target, "status": "dry-run", "payload": payload})
         return
-    store.save_publication(plan.source_url, key, "sighting", target_id=target, status="sending", payload=payload)
-    try:
-        status, body, _ = lookup.client.request(
-            f"{lookup.base_url}/api/sighting/", method="POST",
-            headers={"X-API-KEY": lookup.api_key}, json_body=payload,
-        )
-        response = json.loads(body) if body else {}
-        store.save_publication(plan.source_url, key, "sighting", target_id=target, status="published", payload=payload, response=response)
-        current.append({"kind": "sighting", "target": target, "status": status})
-    except HTTPError as exc:
-        completed = exc.status == 409
-        store.save_publication(
-            plan.source_url, key, "sighting", target_id=target,
-            status="published" if completed else "failed", payload=payload,
-            response={"duplicate": True} if completed else {}, error="" if completed else str(exc),
-        )
-        current.append({
-            "kind": "sighting", "target": target,
-            "status": exc.status if completed else "failed",
-            **({} if completed else {"error": str(exc)}),
-        })
-    except Exception as exc:
-        store.save_publication(
-            plan.source_url, key, "sighting", target_id=target,
-            status="failed", payload=payload, error=str(exc),
-        )
-        current.append({"kind": "sighting", "target": target, "status": "failed", "error": str(exc)})
+    store.save_publication(
+        plan.source_url, key, "sighting", target_id=target,
+        status="published", payload=payload,
+    )
+    current.append({"kind": "sighting", "target": target, "status": "published"})
 
 
 def _plan_is_complete(store: Store, plan: PublicationPlan, policy: PublicationPolicy) -> bool:
@@ -238,7 +256,6 @@ def _plan_is_complete(store: Store, plan: PublicationPlan, policy: PublicationPo
 
 def execute_automatic_publication(
     store: Store,
-    lookup: VulnerabilityLookup,
     policy: PublicationPolicy,
     *,
     limit: int = 0,
@@ -264,7 +281,7 @@ def execute_automatic_publication(
         if policy.publish_sightings:
             for target in plan.targets:
                 _publish_sighting(
-                    store, lookup, row, plan, target, current,
+                    store, row, plan, target, current,
                     dry_run=dry_run, retry_failed=retry_failed,
                 )
 
@@ -277,7 +294,7 @@ def execute_automatic_publication(
             current.append({"kind": "gcve", "id": gcve_id, "status": "already-published"})
             if policy.publish_sightings:
                 _publish_sighting(
-                    store, lookup, row, plan, gcve_id, current,
+                    store, row, plan, gcve_id, current,
                     dry_run=dry_run, retry_failed=retry_failed,
                 )
             continue
@@ -291,32 +308,16 @@ def execute_automatic_publication(
 
         try:
             if not gcve_id:
-                gcve_id = store.reserve_gcve_id(publication_year(row))
-                store.save_publication(plan.source_url, key, "gcve", gcve_id=gcve_id, status="reserved")
+                gcve_id = store.reserve_gcve(
+                    plan.source_url, key, policy.gna_id, publication_year(row)
+                )
             payload = build_gcve_record(row, gcve_id, plan, policy)
-            store.save_publication(plan.source_url, key, "gcve", gcve_id=gcve_id, status="sending", payload=payload)
-            status, response = lookup.publish_gcve(gcve_id, payload)
-            try:
-                store.publish_gcve_record(
-                    plan.source_url,
-                    payload,
-                    record_type=plan.record_type,
-                    assigner=policy.gna_short_name,
-                )
-            except sqlite3.IntegrityError:
-                # A retry may reach this point after the remote write completed but
-                # before the operations ledger was marked as published.
-                store.update_gcve_record(
-                    gcve_id,
-                    payload,
-                    record_type=plan.record_type,
-                    assigner=policy.gna_short_name,
-                )
-            store.save_publication(plan.source_url, key, "gcve", gcve_id=gcve_id, status="published", payload=payload, response=response)
-            current.append({"kind": "gcve", "id": gcve_id, "status": status})
+            validate_gcve_record(payload)
+            store.publish_gcve(plan.source_url, key, gcve_id, payload)
+            current.append({"kind": "gcve", "id": gcve_id, "status": "published"})
             if policy.publish_sightings:
                 _publish_sighting(
-                    store, lookup, row, plan, gcve_id, current,
+                    store, row, plan, gcve_id, current,
                     dry_run=False, retry_failed=retry_failed,
                 )
         except Exception as exc:
