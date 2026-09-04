@@ -67,7 +67,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == "/":
+        if parsed.path == "/dumps/gna-1988.ndjson":
+            self._gna_dump()
+        elif parsed.path == "/":
             self._index(params)
         elif parsed.path == "/observation":
             self._detail(params.get("source", [""])[0])
@@ -82,6 +84,25 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
         else:
             self._send(_layout("Not found", '<div class="panel"><h1>Not found</h1></div>'), 404)
+
+    def _gna_dump(self) -> None:
+        from .dump import ndjson_lines
+
+        context = ndjson_lines(self.server.lookup)
+        try:
+            lines = context.__enter__()
+        except Exception as exc:
+            self._send(f"Unable to generate dump: {exc}".encode("utf-8"), 502, "text/plain; charset=utf-8")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            for line in lines:
+                self.wfile.write(line)
+        finally:
+            context.__exit__(None, None, None)
 
     def do_POST(self) -> None:
         if self.path == "/connect":
