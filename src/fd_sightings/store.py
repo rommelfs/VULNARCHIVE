@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS automatic_publications (
     payload_json TEXT NOT NULL DEFAULT '{}',
     response_json TEXT NOT NULL DEFAULT '{}',
     error TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reserved_at TEXT,
+    published_at TEXT,
+    updated_at TEXT NOT NULL,
     PRIMARY KEY (source_url, publication_key)
 );
 CREATE TABLE IF NOT EXISTS gcve_reservations (
@@ -98,6 +100,25 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        publication_columns = {row[1] for row in self.db.execute("PRAGMA table_info(automatic_publications)")}
+        for name in ("reserved_at", "published_at"):
+            if name not in publication_columns:
+                self.db.execute(f"ALTER TABLE automatic_publications ADD COLUMN {name} TEXT")
+        # Older ledgers only had SQLite's timezone-less CURRENT_TIMESTAMP. Treat
+        # those values as UTC and preserve them as the best known event time.
+        for rowid, kind, status, reserved, published, updated in self.db.execute(
+            "SELECT rowid, kind, status, reserved_at, published_at, updated_at FROM automatic_publications"
+        ).fetchall():
+            normalized = self._normalize_stored_timestamp(str(updated))
+            self.db.execute(
+                "UPDATE automatic_publications SET reserved_at=?, published_at=?, updated_at=? WHERE rowid=?",
+                (
+                    reserved or (normalized if kind == "gcve" else None),
+                    published or (normalized if kind == "gcve" and status == "published" else None),
+                    normalized,
+                    rowid,
+                ),
+            )
         self.db.commit()
 
     def close(self) -> None:
@@ -411,18 +432,37 @@ class Store:
         payload: object | None = None,
         response: object | None = None,
         error: str = "",
+        at: datetime | None = None,
     ) -> None:
         previous = self.publication(source_url, publication_key) or {}
+        timestamp = self._utc_iso(at or datetime.now(timezone.utc))
+        payload_value = payload if payload is not None else previous.get("payload", {})
+        response_value = response if response is not None else previous.get("response", {})
+        reserved_at = previous.get("reserved_at")
+        if kind == "gcve" and gcve_id and not reserved_at:
+            reserved_at = timestamp
+        published_at = previous.get("published_at")
+        if kind == "gcve" and status == "published" and not published_at:
+            published_at = timestamp
+        # Transport/status retries do not constitute record changes.  Publication
+        # does, as does a changed payload after publication.
+        content_changed = payload is not None and payload_value != previous.get("payload")
+        updated_at = previous.get("updated_at") or timestamp
+        if kind == "gcve" and (not previous or (status == "published" and not previous.get("published_at")) or
+                               (previous.get("published_at") and content_changed)):
+            updated_at = timestamp
         self.db.execute(
             """INSERT INTO automatic_publications
-            (source_url, publication_key, kind, target_id, gcve_id, status, payload_json, response_json, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (source_url, publication_key, kind, target_id, gcve_id, status, payload_json, response_json,
+             error, reserved_at, published_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_url, publication_key) DO UPDATE SET
               kind=excluded.kind, target_id=excluded.target_id,
               gcve_id=CASE WHEN excluded.gcve_id='' THEN automatic_publications.gcve_id ELSE excluded.gcve_id END,
               status=excluded.status, payload_json=excluded.payload_json,
               response_json=excluded.response_json, error=excluded.error,
-              updated_at=CURRENT_TIMESTAMP""",
+              reserved_at=excluded.reserved_at, published_at=excluded.published_at,
+              updated_at=excluded.updated_at""",
             (
                 source_url,
                 publication_key,
@@ -430,9 +470,12 @@ class Store:
                 target_id,
                 gcve_id,
                 status,
-                json.dumps(payload if payload is not None else previous.get("payload", {})),
-                json.dumps(response if response is not None else previous.get("response", {})),
+                json.dumps(payload_value),
+                json.dumps(response_value),
                 error[:4000],
+                reserved_at,
+                published_at,
+                updated_at,
             ),
         )
         self.db.commit()
@@ -536,3 +579,11 @@ class Store:
             item["response"] = json.loads(str(item.pop("response_json")))
             result.append(item)
         return result
+
+    def published_gcve_records(self) -> list[dict[str, object]]:
+        """Return complete records successfully published by this instance."""
+        rows = self.db.execute(
+            """SELECT payload_json FROM automatic_publications
+            WHERE kind='gcve' AND status='published' AND gcve_id LIKE 'GCVE-1988-%'"""
+        ).fetchall()
+        return [json.loads(str(row[0])) for row in rows]

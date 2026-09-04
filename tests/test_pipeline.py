@@ -1,3 +1,4 @@
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -36,6 +37,58 @@ marker_exists=yes
 
 
 class ParserTests(unittest.TestCase):
+    @staticmethod
+    def _public_record(identifier, published, updated, product="Widget", assigner="VULNARCHIVE", cwe="CWE-79"):
+        return {
+            "dataType": "CVE_RECORD", "dataVersion": "5.2",
+            "cveMetadata": {
+                "vulnId": identifier, "state": "PUBLISHED",
+                "assignerOrgId": "28d1c82f-17f8-5267-83b3-4d8a68121c8a",
+                "assignerShortName": assigner, "datePublished": published, "dateUpdated": updated,
+            },
+            "containers": {"cna": {
+                "providerMetadata": {}, "descriptions": [{"lang": "en", "value": "test"}],
+                "affected": [{"vendor": "Example", "product": product, "versions": []}],
+                "references": [],
+                "problemTypes": [{"descriptions": [{"lang": "en", "type": "CWE", "cweId": cwe}]}],
+            }},
+        }
+
+    def test_publication_api_filters_paginates_and_returns_bare_array(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "public.sqlite")
+            try:
+                first = self._public_record("GCVE-1988-2026-0002", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z")
+                second = self._public_record("GCVE-1988-2026-0001", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "Other", cwe="CWE-089")
+                foreign = self._public_record("GCVE-42-2026-0001", "2026-03-01T00:00:00Z", "2026-03-01T00:00:00Z")
+                for number, record in enumerate((first, second, foreign)):
+                    store.save_publication(str(number), "gcve:advisory", "gcve", gcve_id=record["cveMetadata"]["vulnId"], status="published", payload=record)
+
+                status, body = publication_response(store, "date_sort=published&sort_order=asc&per_page=1&page=1")
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)[0]["cveMetadata"]["vulnId"], "GCVE-1988-2026-0001")
+                status, body = publication_response(store, "product=wIdGeT&assigner=vulnarchive&cwe=79&since=2026-01-15T00%3A00%3A00%2B00%3A00")
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), [first])
+                status, body = publication_response(store, "page=99")
+                self.assertEqual((status, json.loads(body)), (200, []))
+            finally:
+                store.close()
+
+    def test_publication_api_rejects_invalid_parameters_consistently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "invalid.sqlite")
+            try:
+                for query in ("page=0", "per_page=101", "sort_order=ASC", "date_sort=Published", "since=", "since=2026-01-01", "cwe=nope"):
+                    status, body = publication_response(store, query)
+                    error = json.loads(body)
+                    self.assertEqual(status, 400, query)
+                    self.assertEqual(error["error"], "invalid_parameter", query)
+                    self.assertIn("parameter", error, query)
+                    self.assertIn("message", error, query)
+            finally:
+                store.close()
+
     def test_message_and_extraction(self):
         message = parse_message(MESSAGE_HTML, "https://seclists.org/fulldisclosure/2026/Sep/27")
         self.assertEqual(message.author, "Ron E")

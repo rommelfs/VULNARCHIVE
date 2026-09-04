@@ -203,6 +203,21 @@ endpoint `/api/gcve/publication`; no round trip through Vulnerability-Lookup is
 part of reservation or publication. The GNA directory's `gcve_pull_api` should
 point to `https://vuln.freearchive.org`.
 
+### Publication timestamps and ordering
+
+The local publication ledger keeps three independent UTC timestamps: `reserved_at`
+for local GCVE-ID allocation, `published_at` for the first successful public
+publication, and `updated_at` for the most recent content change. They are serialized
+as ISO-8601 values ending in `Z`. A historical source date never initializes
+`published_at`; it remains provenance in `x_vulnarchive.sourcePublishedAt`.
+
+Publication queries accept `date_sort=published`, `date_sort=updated`, and
+`date_sort=reserved`. An omitted or empty `date_sort` defaults to `updated`. Ordering
+is newest first, with the GCVE ID ascending as a stable tie-breaker. The incremental
+filter is strict and means `published_at > since OR updated_at > since`; a record
+exactly at the boundary is therefore excluded. Input timestamps must be ISO-8601 and
+include a timezone.
+
 ## Matching policy
 
 - An explicit identifier that resolves receives confidence `1.0`.

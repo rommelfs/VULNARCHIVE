@@ -129,11 +129,18 @@ den Timer erst nach einem Dry Run:
 
 ```sh
 sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
+curl --fail --header 'Accept: text/plain' https://vuln.freearchive.org/.well-known/security.txt
 curl --fail https://vuln.freearchive.org/.well-known/api-policy.json
 curl --fail 'https://vuln.freearchive.org/api/gcve/publication?per_page=1'
 curl --fail 'https://vuln.freearchive.org/api/gcve/publication?since=2026-09-01T00:00:00Z&per_page=1'
 curl --fail https://vuln.freearchive.org/dumps/gna-1988.ndjson
 ```
+
+Der im `GCVE`-Feld von `security.txt` veröffentlichte Basis-URL ist für die beiden
+folgenden Ressourcen maßgeblich. Der Abnahmetest `deploy/verify-bcp03.py` liest ihn
+deshalb aus der Well-known-Datei und ruft sowohl `/api/gcve/publication` als auch
+`/dumps/gna-1988.ndjson` relativ zu diesem Wert ab. `Contact` und `Expires` werden
+ergänzt, sobald die produktive Sicherheitskontaktadresse feststeht.
 
 Pagination muss anhand des von der Antwort gelieferten Next-Links/Cursors bis zur
 letzten Seite getestet werden; keine URL-Konvention erraten. Prüfe einen nach dem
