@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .models import Extraction, Match, Message
 
@@ -51,6 +53,36 @@ CREATE TABLE IF NOT EXISTS automatic_publications (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (source_url, publication_key)
 );
+CREATE TABLE IF NOT EXISTS gcve_records (
+    vuln_id TEXT PRIMARY KEY,
+    source_url TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    record_type TEXT NOT NULL,
+    assigner TEXT NOT NULL,
+    reserved_at TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    product_normalized TEXT,
+    vendor_normalized TEXT,
+    cwe_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS gcve_records_chronological_idx
+    ON gcve_records (updated_at, published_at, vuln_id);
+CREATE INDEX IF NOT EXISTS gcve_records_assigner_idx
+    ON gcve_records (assigner, updated_at, vuln_id);
+CREATE INDEX IF NOT EXISTS gcve_records_type_idx
+    ON gcve_records (record_type, updated_at, vuln_id);
+CREATE INDEX IF NOT EXISTS gcve_records_product_idx
+    ON gcve_records (product_normalized, updated_at, vuln_id);
+CREATE INDEX IF NOT EXISTS gcve_records_vendor_idx
+    ON gcve_records (vendor_normalized, updated_at, vuln_id);
+CREATE INDEX IF NOT EXISTS gcve_records_cwe_idx
+    ON gcve_records (cwe_json, updated_at, vuln_id);
+CREATE TABLE IF NOT EXISTS gcve_year_sequences (
+    year INTEGER PRIMARY KEY CHECK (year BETWEEN 1000 AND 9999),
+    last_serial INTEGER NOT NULL CHECK (last_serial >= 0),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -84,6 +116,188 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+
+    @staticmethod
+    def _utc_now() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    @staticmethod
+    def _record_id(record: dict[str, Any]) -> str:
+        metadata = record.get("cveMetadata")
+        value = metadata.get("vulnId") if isinstance(metadata, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("record requires cveMetadata.vulnId")
+        return value.strip().upper()
+
+    @staticmethod
+    def _record_defaults(record: dict[str, Any]) -> dict[str, object]:
+        metadata = record.get("cveMetadata") if isinstance(record.get("cveMetadata"), dict) else {}
+        containers = record.get("containers") if isinstance(record.get("containers"), dict) else {}
+        cna = containers.get("cna") if isinstance(containers.get("cna"), dict) else {}
+        affected = cna.get("affected") if isinstance(cna.get("affected"), list) else []
+        first_affected = affected[0] if affected and isinstance(affected[0], dict) else {}
+        extensions = cna.get("x_gcve") if isinstance(cna.get("x_gcve"), list) else []
+        extension = extensions[0] if extensions and isinstance(extensions[0], dict) else {}
+        cwes: list[str] = []
+        for problem in cna.get("problemTypes", []) if isinstance(cna.get("problemTypes"), list) else []:
+            if not isinstance(problem, dict):
+                continue
+            for description in problem.get("descriptions", []) if isinstance(problem.get("descriptions"), list) else []:
+                if isinstance(description, dict) and description.get("cweId"):
+                    cwes.append(str(description["cweId"]).upper())
+        return {
+            "record_type": str(extension.get("recordType") or "unknown"),
+            "assigner": str(metadata.get("assignerShortName") or metadata.get("assignerOrgId") or "unknown"),
+            "published_at": str(metadata.get("datePublished") or ""),
+            "updated_at": str(metadata.get("dateUpdated") or ""),
+            "product_normalized": Store._normalize_filter(first_affected.get("product")),
+            "vendor_normalized": Store._normalize_filter(first_affected.get("vendor")),
+            "cwes": sorted(set(cwes)),
+        }
+
+    @staticmethod
+    def _normalize_filter(value: object) -> str | None:
+        text = " ".join(str(value or "").strip().casefold().split())
+        return text or None
+
+    def reserve_gcve_id(self, year: int) -> str:
+        """Atomically allocate the next local GNA 1988 identifier for *year*."""
+        if isinstance(year, bool) or not isinstance(year, int) or not 1000 <= year <= 9999:
+            raise ValueError("year must be a four-digit integer")
+        try:
+            # BEGIN IMMEDIATE obtains SQLite's write lock before reading the counter,
+            # so separate Store instances cannot observe and allocate the same value.
+            self.db.execute("BEGIN IMMEDIATE")
+            row = self.db.execute(
+                "SELECT last_serial FROM gcve_year_sequences WHERE year=?", (year,)
+            ).fetchone()
+            serial = int(row[0]) + 1 if row else 1
+            self.db.execute(
+                """INSERT INTO gcve_year_sequences (year, last_serial) VALUES (?, ?)
+                ON CONFLICT(year) DO UPDATE SET
+                  last_serial=excluded.last_serial, updated_at=CURRENT_TIMESTAMP""",
+                (year, serial),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return f"GCVE-1988-{year}-{serial:04d}"
+
+    def publish_gcve_record(
+        self,
+        source_url: str,
+        record: dict[str, Any],
+        *,
+        record_type: str | None = None,
+        assigner: str | None = None,
+        reserved_at: str | None = None,
+        published_at: str | None = None,
+        updated_at: str | None = None,
+        product_normalized: str | None = None,
+        vendor_normalized: str | None = None,
+        cwes: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
+        """Persist the first published version; an existing ID is never overwritten."""
+        vuln_id = self._record_id(record)
+        defaults = self._record_defaults(record)
+        now = self._utc_now()
+        published = published_at or str(defaults["published_at"]) or now
+        updated = updated_at or str(defaults["updated_at"]) or published
+        cwe_values = sorted(set(str(value).upper() for value in (cwes if cwes is not None else defaults["cwes"])))
+        self.db.execute(
+            """INSERT INTO gcve_records
+            (vuln_id, source_url, record_json, record_type, assigner, reserved_at,
+             published_at, updated_at, product_normalized, vendor_normalized, cwe_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                vuln_id, source_url, json.dumps(record, ensure_ascii=False, sort_keys=True),
+                record_type or defaults["record_type"], assigner or defaults["assigner"],
+                reserved_at or now, published, updated,
+                self._normalize_filter(product_normalized) if product_normalized is not None else defaults["product_normalized"],
+                self._normalize_filter(vendor_normalized) if vendor_normalized is not None else defaults["vendor_normalized"],
+                json.dumps(cwe_values),
+            ),
+        )
+        self.db.commit()
+        return vuln_id
+
+    def update_gcve_record(
+        self,
+        vuln_id: str,
+        record: dict[str, Any],
+        *,
+        record_type: str | None = None,
+        assigner: str | None = None,
+        updated_at: str | None = None,
+        product_normalized: str | None = None,
+        vendor_normalized: str | None = None,
+        cwes: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        """Replace a published record while preserving its reservation and publication dates."""
+        identifier = vuln_id.strip().upper()
+        if self._record_id(record) != identifier:
+            raise ValueError("record identifier does not match vuln_id")
+        defaults = self._record_defaults(record)
+        cwe_values = sorted(set(str(value).upper() for value in (cwes if cwes is not None else defaults["cwes"])))
+        cursor = self.db.execute(
+            """UPDATE gcve_records SET record_json=?, record_type=?, assigner=?, updated_at=?,
+            product_normalized=?, vendor_normalized=?, cwe_json=? WHERE vuln_id=?""",
+            (
+                json.dumps(record, ensure_ascii=False, sort_keys=True),
+                record_type or defaults["record_type"], assigner or defaults["assigner"],
+                updated_at or str(defaults["updated_at"]) or self._utc_now(),
+                self._normalize_filter(product_normalized) if product_normalized is not None else defaults["product_normalized"],
+                self._normalize_filter(vendor_normalized) if vendor_normalized is not None else defaults["vendor_normalized"],
+                json.dumps(cwe_values), identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            self.db.rollback()
+            raise KeyError(identifier)
+        self.db.commit()
+
+    def query_gcve_records(
+        self,
+        *,
+        since: str | None = None,
+        record_type: str | None = None,
+        assigner: str | None = None,
+        product: str | None = None,
+        vendor: str | None = None,
+        cwe: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return canonical records selected by BCP-03 publication-feed filters."""
+        if page < 1 or not 1 <= per_page <= 100:
+            raise ValueError("page must be positive and per_page must be between 1 and 100")
+        clauses: list[str] = []
+        params: list[object] = []
+        for column, value in (("updated_at", since), ("record_type", record_type), ("assigner", assigner)):
+            if value is not None:
+                clauses.append(f"{column} >= ?" if column == "updated_at" else f"{column} = ?")
+                params.append(value)
+        for column, value in (("product_normalized", product), ("vendor_normalized", vendor)):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                params.append(self._normalize_filter(value))
+        if cwe is not None:
+            clauses.append("EXISTS (SELECT 1 FROM json_each(cwe_json) WHERE value = ?)")
+            params.append(cwe.upper())
+        query = "SELECT record_json FROM gcve_records"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at, published_at, vuln_id LIMIT ? OFFSET ?"
+        params.extend((per_page, (page - 1) * per_page))
+        return [json.loads(row[0]) for row in self.db.execute(query, params)]
+
+    def dump_gcve_records(self) -> list[dict[str, Any]]:
+        """Return the complete canonical dump in stable chronological order."""
+        rows = self.db.execute(
+            "SELECT record_json FROM gcve_records ORDER BY updated_at, published_at, vuln_id"
+        )
+        return [json.loads(row[0]) for row in rows]
 
     def seen(self, source_url: str) -> bool:
         return self.db.execute("SELECT 1 FROM observations WHERE source_url = ?", (source_url,)).fetchone() is not None
