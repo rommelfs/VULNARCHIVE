@@ -173,8 +173,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "review":
             from .review_ui import serve
-            _, lookup = _clients(args)
-            serve(store, lookup, args.bind, args.port)
+            serve(store, args.bind, args.port)
             return 0
 
         if args.command == "public":

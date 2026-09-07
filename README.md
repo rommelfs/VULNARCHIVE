@@ -96,7 +96,7 @@ defaults to localhost when it is started outside the supplied systemd unit. The
 interface supports queue filters, source evidence, match overrides, approval,
 rejection, and review notes.
 
-The review interface uses the optional read-only lookup service to validate foreign identifiers and find candidates. Automatic GCVE publication is always local.
+The review interface has no connection or credential settings and performs no external writes. Its publication dashboard creates BCP-05 records transactionally in the local store; Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 

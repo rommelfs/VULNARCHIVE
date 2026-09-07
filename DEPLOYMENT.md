@@ -36,7 +36,7 @@ sudo systemctl enable --now vulnarchive-web
 sudo systemctl start vulnarchive-review
 ```
 
-`VL_URL` is optional and is used only for read-only resolution of foreign identifiers. GCVE reservation and publication require no external account or API key. Set `VA_REVIEW_BIND=10.205.22.135` and allow TCP/8765 only from the trusted RFC1918 operator network. No credential is loaded by the public process, and its HTTP handler implements GET only. The static `deploy/security.txt` is the single discovery document served by Apache and mirrored by the application.
+`VL_URL` is optional and is used by the importer only for read-only resolution of foreign identifiers. The review service has no Vulnerability-Lookup connection and performs no external writes. GCVE reservation and publication require no external account or API key. Set `VA_REVIEW_BIND=10.205.22.135` and allow TCP/8765 only from the trusted RFC1918 operator network. No credential is loaded by the public process, and its HTTP handler implements GET only. The static `deploy/security.txt` is the single discovery document served by Apache and mirrored by the application.
 
 ## Apache and public acceptance
 
