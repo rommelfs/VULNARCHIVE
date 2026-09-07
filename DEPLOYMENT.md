@@ -80,13 +80,37 @@ Run the supplied upgrade script from any directory; it operates on
 sudo /opt/vulnarchive/deploy/upgrade.sh
 ```
 
-Do not run `git pull` or `pip install` separately. The script refuses a dirty checkout,
+Do not run `git pull` or `pip install` separately. The script removes disposable
+`build/` and `src/*.egg-info/` artifacts and refuses modified tracked files,
 performs a fast-forward-only pull, tests the target source before downtime, stops the
 sync timer and application processes, creates a consistent SQLite backup, preserves the
 configuration and previous Git revision, reinstalls the package, updates the systemd
 units, applies store migrations through a non-publishing plan, restores only services
 that were active, and checks the local public endpoint. Backups are stored below
 `/var/backups/vulnarchive` by default.
+
+When upgrading once from an older script that still rejects these generated
+untracked directories, bootstrap the fixed script as follows:
+
+```sh
+cd /opt/vulnarchive
+rm -rf -- build src/fd_sightings.egg-info
+git pull --ff-only
+sudo ./deploy/upgrade.sh --no-pull
+```
+
+This one-time sequence is only necessary for the affected older script. New versions
+remove untracked build artifacts both before the Git check and after package installation.
+Confirm that the fixed script is actually present before rerunning it:
+
+```sh
+/opt/vulnarchive/deploy/upgrade.sh --version
+# VULNARCHIVE upgrade script 2
+```
+
+If `--version` is rejected, or the output still says `uncommitted changes` rather than
+`modified tracked files`, the checkout is still on the old revision. Running that old
+script again cannot install a fix which is not present on its configured Git branch.
 
 If another deployment mechanism has already checked out the desired revision, use:
 

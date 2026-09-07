@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+UPGRADE_SCRIPT_VERSION=2
 
 # Complete in-place production upgrade for the deployment documented in
 # DEPLOYMENT.md. Override paths through the environment for staging installs.
@@ -14,12 +15,14 @@ PULL=1
 usage() {
     cat <<EOF
 Usage: sudo $0 [--no-pull]
+       $0 --version
 
 Updates VULNARCHIVE, runs its tests, backs up SQLite and configuration, installs
 the package and systemd units, migrates the store, restarts previously active
 services, and checks the local public endpoint.
 
   --no-pull  install the currently checked-out revision without git pull
+  --version  print the upgrade-script version and exit
 
 Path overrides: VULNARCHIVE_APP_DIR, VULNARCHIVE_VENV_DIR,
 VULNARCHIVE_ENV_FILE, VULNARCHIVE_BACKUP_DIR, VULNARCHIVE_DB_FILE, PYTHON.
@@ -29,6 +32,7 @@ EOF
 case ${1:-} in
     "") ;;
     --no-pull) PULL=0 ;;
+    --version) echo "VULNARCHIVE upgrade script $UPGRADE_SCRIPT_VERSION"; exit 0 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
 esac
@@ -37,6 +41,7 @@ if [[ $EUID -ne 0 ]]; then
     echo "error: run this upgrade with sudo or as root" >&2
     exit 1
 fi
+echo "==> VULNARCHIVE upgrade script $UPGRADE_SCRIPT_VERSION"
 for command in git systemctl install flock runuser curl; do
     command -v "$command" >/dev/null || { echo "error: missing command: $command" >&2; exit 1; }
 done
@@ -47,8 +52,34 @@ exec 9>/run/lock/vulnarchive-upgrade.lock
 flock -n 9 || { echo "error: another VULNARCHIVE upgrade is running" >&2; exit 1; }
 
 cd "$APP_DIR"
-if [[ -n $(git status --porcelain) ]]; then
-    echo "error: refusing to upgrade a checkout with uncommitted changes" >&2
+clean_build_artifacts() {
+    local path
+    local -a paths=("$APP_DIR/build")
+    while IFS= read -r -d '' path; do
+        paths+=("$path")
+    done < <(find "$APP_DIR/src" -mindepth 1 -maxdepth 1 -type d -name '*.egg-info' -print0)
+
+    for path in "${paths[@]}"; do
+        [[ -e "$path" ]] || continue
+        # Never remove the path if any file below it is tracked, even if a
+        # future .gitignore rule accidentally classifies adjacent files.
+        if [[ -n $(git ls-files -- "$path") ]]; then
+            echo "error: refusing to remove tracked build path: $path" >&2
+            exit 1
+        fi
+        rm -rf -- "$path"
+    done
+}
+
+# Local package builds can leave these disposable artifacts behind. This works
+# even while upgrading from a revision that did not ignore the artifacts yet.
+clean_build_artifacts
+
+# Only tracked modifications are unsafe. Other untracked operator files do not
+# affect a fast-forward pull; Git itself still refuses an actual path collision.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "error: refusing to upgrade a checkout with modified tracked files" >&2
+    git status --short >&2
     exit 1
 fi
 
@@ -127,6 +158,9 @@ fi
 
 echo "==> Installing target revision into the virtual environment"
 "$VENV_DIR/bin/python" -m pip install --no-deps --force-reinstall --no-build-isolation "$APP_DIR"
+# setuptools may generate build/ and *.egg-info in the checkout. Do not leave
+# them behind to surprise an older upgrade script or an operator's git status.
+clean_build_artifacts
 
 echo "==> Installing systemd units"
 install -m 0644 deploy/vulnarchive-web.service deploy/vulnarchive-review.service \
@@ -147,11 +181,13 @@ echo "==> Restarting previously active services"
 if (( web_was_active )); then
     echo "==> Checking local public service"
     for attempt in {1..20}; do
-        if curl --silent --show-error --fail --max-time 2 http://127.0.0.1:8766/ >/dev/null; then
+        if curl --silent --fail --max-time 2 http://127.0.0.1:8766/ >/dev/null 2>&1; then
             break
         fi
         if (( attempt == 20 )); then
             echo "error: public service health check failed" >&2
+            systemctl --no-pager --full status vulnarchive-web.service >&2 || true
+            journalctl --no-pager -u vulnarchive-web.service -n 30 >&2 || true
             exit 1
         fi
         sleep 1
