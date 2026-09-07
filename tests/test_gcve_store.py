@@ -1,4 +1,5 @@
 import sqlite3
+import json
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,25 @@ def record(identifier: str, updated: str, *, product: str = "Widget", cwe: str =
 
 
 class GCVEStoreTests(unittest.TestCase):
+    def test_merge_era_two_column_store_is_migrated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.sqlite"
+            legacy = sqlite3.connect(path)
+            legacy.execute("CREATE TABLE gcve_records (gcve_id TEXT PRIMARY KEY, record_json TEXT NOT NULL, published_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+            item = record("GCVE-1988-2026-0001", "2026-03-01T00:00:00Z")
+            legacy.execute("INSERT INTO gcve_records (gcve_id, record_json) VALUES (?, ?)",
+                           (item["cveMetadata"]["vulnId"], json.dumps(item)))
+            legacy.commit()
+            legacy.close()
+            store = Store(path)
+            try:
+                self.assertEqual(store.dump_gcve_records(), [item])
+                columns = {row[1] for row in store.db.execute("PRAGMA table_info(gcve_records)")}
+                self.assertIn("vuln_id", columns)
+                self.assertNotIn("gcve_id", columns)
+            finally:
+                store.close()
+
     def test_reservations_are_atomic_and_scoped_by_year(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gcve.sqlite"

@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
 """Exercise the BCP-03 API against an isolated, local VULNARCHIVE store.
 
-This is deliberately a hermetic contract test.  It neither needs credentials nor
-writes to a running Vulnerability-Lookup instance.  The HTTP fixture reads the
-records from a temporary NDJSON store, just like the public feed and dump do.
+This is deliberately a hermetic contract test. It starts the production public
+server against a temporary canonical SQLite store and needs no credentials.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import unittest
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from fd_sightings.public_ui import PublicServer
+from fd_sightings.store import Store
 
 
 MAX_PER_PAGE = 100
@@ -26,6 +32,27 @@ LOCAL_ORG = "00000000-0000-4000-8000-000000001988"
 FOREIGN_ORG = "00000000-0000-4000-8000-000000000001"
 DATE_FIELDS = {"published": "datePublished", "updated": "dateUpdated"}
 SORT_ORDERS = ("asc", "desc")
+
+
+class CheckFailure(RuntimeError):
+    pass
+
+
+def gcve_base(http: Any) -> str:
+    """Validate and return the GCVE base advertised by security.txt."""
+    status, body, headers = http.request("/.well-known/security.txt")
+    if status != 200:
+        raise CheckFailure(f"security.txt returned HTTP {status}")
+    if headers.get("Content-Type", "").lower() != "text/plain; charset=utf-8":
+        raise CheckFailure("security.txt must use Content-Type 'text/plain; charset=utf-8'")
+    values = [line.partition(":")[2].strip() for line in body.decode("utf-8").splitlines()
+              if line.lower().startswith("gcve:")]
+    if len(values) != 1:
+        raise CheckFailure("security.txt must contain exactly one GCVE field")
+    parsed = urllib.parse.urlsplit(values[0])
+    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+        raise CheckFailure("security.txt GCVE field must be an absolute HTTPS base URL")
+    return values[0].rstrip("/")
 
 
 def timestamp(day: int, hour: int = 0) -> str:
@@ -103,91 +130,13 @@ def validate_bcp05(record: dict[str, Any]) -> None:
     assert isinstance(cna["x_gcve"][0]["relationships"], list)
 
 
-class LocalStoreApplication:
-    """Small HTTP adapter over the temporary store used only by this test."""
-
-    def __init__(self, store: Path) -> None:
-        self.store = store
-
-    def records(self) -> list[dict[str, Any]]:
-        return [json.loads(line) for line in self.store.read_text(encoding="utf-8").splitlines() if line]
-
-    def publication(self, query: dict[str, list[str]]) -> tuple[int, Any]:
-        def one(name: str, default: str) -> str:
-            return query.get(name, [default])[-1]
-
-        try:
-            page, per_page = int(one("page", "1")), int(one("per_page", "30"))
-        except ValueError:
-            return 400, {"error": "page and per_page must be integers"}
-        date_sort, order = one("date_sort", "published"), one("sort_order", "desc")
-        if page < 1 or not 1 <= per_page <= MAX_PER_PAGE or date_sort not in DATE_FIELDS or order not in SORT_ORDERS:
-            return 400, {"error": "invalid query parameter"}
-        since = one("since", "")
-        if since:
-            try:
-                datetime.fromisoformat(since.replace("Z", "+00:00"))
-            except ValueError:
-                return 400, {"error": "invalid since timestamp"}
-
-        values = [record for record in self.records()
-                  if record["cveMetadata"]["state"] == "PUBLISHED"
-                  and record["cveMetadata"]["assignerOrgId"] == LOCAL_ORG]
-        field = DATE_FIELDS[date_sort]
-        if since:
-            values = [record for record in values if record["cveMetadata"][field] >= since]
-        source, cwe = one("source", "").casefold(), one("cwe", "").casefold()
-        product, assigner = one("product", "").casefold(), one("assigner", "").casefold()
-        if source:
-            values = [r for r in values if r["containers"]["cna"]["providerMetadata"]["shortName"].casefold() == source]
-        if cwe:
-            values = [r for r in values if any(
-                d.get("cweId", "").casefold() == cwe
-                for group in r["containers"]["cna"].get("problemTypes", [])
-                for d in group.get("descriptions", []))]
-        if product:
-            values = [r for r in values if any(product in item.get("product", "").casefold()
-                                                for item in r["containers"]["cna"]["affected"])]
-        if assigner:
-            values = [r for r in values if assigner in r["cveMetadata"]["assignerShortName"].casefold()]
-        values.sort(key=lambda r: (r["cveMetadata"][field], record_id(r)), reverse=order == "desc")
-        start = (page - 1) * per_page
-        return 200, values[start:start + per_page]
-
-
-class Handler(BaseHTTPRequestHandler):
-    app: LocalStoreApplication
-
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        parsed = urllib.parse.urlsplit(self.path)
-        if parsed.path == "/api/gcve/publication":
-            status, value = self.app.publication(urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
-            self._send(status, json.dumps(value, separators=(",", ":")).encode(), "application/json")
-        elif parsed.path == "/dumps/gna-1988.ndjson":
-            records = [record for record in self.app.records()
-                       if record["cveMetadata"]["state"] == "PUBLISHED"
-                       and record["cveMetadata"]["assignerOrgId"] == LOCAL_ORG]
-            body = "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records).encode()
-            self._send(200, body, "application/x-ndjson")
-        else:
-            self._send(404, b'{"error":"not found"}', "application/json")
-
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, _format: str, *args: object) -> None:
-        pass
-
-
 class PublicationContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.previous_org = os.environ.get("VA_GNA_ORG_UUID")
+        os.environ["VA_GNA_ORG_UUID"] = LOCAL_ORG
         cls.temporary = tempfile.TemporaryDirectory(prefix="vulnarchive-bcp03-")
-        cls.store = Path(cls.temporary.name) / "gna-1988.ndjson"
+        cls.store = Store(Path(cls.temporary.name) / "vulnarchive.sqlite")
         records = [make_record(i,
                                assigner="CaseSensitiveAssigner" if i == 17 else "VULNARCHIVE",
                                product="MixedCaseProduct" if i == 17 else "ArchiveWidget",
@@ -195,9 +144,9 @@ class PublicationContractTest(unittest.TestCase):
                                source="SPECIAL-SOURCE" if i == 17 else "VULNARCHIVE")
                    for i in range(1, 136)]
         records.extend((make_record(900, state="RESERVED"), make_record(901, org_id=FOREIGN_ORG)))
-        cls.store.write_text("".join(json.dumps(item, separators=(",", ":")) + "\n" for item in records), encoding="utf-8")
-        Handler.app = LocalStoreApplication(cls.store)
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        for record in records:
+            cls.store.publish_gcve_record("fixture:" + record_id(record), record)
+        cls.server = PublicServer(("127.0.0.1", 0), cls.store)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
@@ -207,7 +156,12 @@ class PublicationContractTest(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join()
+        cls.store.close()
         cls.temporary.cleanup()
+        if cls.previous_org is None:
+            os.environ.pop("VA_GNA_ORG_UUID", None)
+        else:
+            os.environ["VA_GNA_ORG_UUID"] = cls.previous_org
 
     def request(self, **parameters: object) -> tuple[int, Any]:
         url = self.base + "/api/gcve/publication"
