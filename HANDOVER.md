@@ -2,8 +2,6 @@
 
 Stand: 4. September 2026
 Projektversion: 0.2.0
-Verbindliche Vulnerability-Lookup-Version: **v2.13.0** (offizieller Release; aufgelösten
-Produktions-Commit zusätzlich aus `INSTALLED_COMMIT` sichern)
 GCVE Numbering Authority: GNA 1988 – VULNARCHIVE
 Öffentliche Zieladresse: <https://vuln.freearchive.org>
 
@@ -110,27 +108,14 @@ Full Disclosure Archive / RSS
     API · BCP-03 · Dumps · Website
 ```
 
-## Festgelegte Vulnerability-Lookup-Basis
+## Produktionsaufteilung
 
-Die freigegebene Produktionsbasis ist ausschließlich Vulnerability-Lookup **v2.13.0**.
-Sie ist in `deploy/vulnerability-lookup.version` gesperrt und wird mit
-`deploy/install-vulnerability-lookup.sh` installiert. Für genau diese Version werden
-`/api/gcve/publication`, `since`-Synchronisation, Pagination, GNA-Dumps und
-`/.well-known/api-policy.json` vorausgesetzt und abgenommen. „Aktuell“ in älteren
-Notizen bedeutet ausdrücklich nicht, ungeprüft den neuesten Upstream-Stand einzusetzen.
+- Der öffentliche, strikt lesende VULNARCHIVE-Prozess läuft auf `127.0.0.1:8766` und stellt BCP-03, Dump, Security-Kontakt, Startseite und Archiv bereit.
+- Die administrative Review-/Publikationsoberfläche läuft getrennt auf `127.0.0.1:8765` und wird nicht vom öffentlichen VirtualHost veröffentlicht.
+- Der Collector/Publisher verwendet den konfigurierten externen `VL_URL`; eine lokale Vulnerability-Lookup-Installation und Port 10001 werden nicht vorausgesetzt.
+- Apache veröffentlicht ausschließlich die in `deploy/apache-vuln.freearchive.org.conf` aufgeführten Leserouten.
 
-Web/API (`127.0.0.1:10001`) und Hintergrund-Worker haben getrennte systemd-Units; sie
-benötigen PostgreSQL, Redis/Valkey und Kvrocks. Initialisierung, vollständiges Mapping
-der acht Generic-Config-Werte, Least-Privilege-Publikationskonto sowie verpflichtende
-Upgrade-/Rollback-Prüfungen stehen in `DEPLOYMENT.md`. Ein Versionswechsel darf erst
-nach Staging-Abnahme des BCP-03-Verhaltens erfolgen.
-
-Produktionsaufteilung:
-
-- Vulnerability-Lookup auf `127.0.0.1:10001` ist kanonischer GCVE- und Sighting-Store und stellt BCP-03 bereit.
-- Der VULNARCHIVE-Collector läuft auf `127.0.0.1:8765`.
-- Apache veröffentlicht Vulnerability-Lookup unter `/` und leitet nur `/archive/` an den Collector weiter.
-- Die lokale Review-/Publikationsoberfläche wird nicht öffentlich exponiert.
+Details zu Units, Trust Boundary und Abnahmetests stehen in `DEPLOYMENT.md`.
 
 ## Projektpfad und wichtige Dateien
 
@@ -140,9 +125,9 @@ Wichtige Dateien:
 - `VULNARCHIVE_POLICY.md` – öffentlich dokumentierbares GNA-Modell
 - `DEPLOYMENT.md` – Produktions-Rollout
 - `config/vulnarchive.env.example` – Collector-/Policy-Konfiguration
-- `config/vulnerability-lookup.generic.json.example` – Einstellungen der Zielinstanz
 - `deploy/apache-vuln.freearchive.org.conf` – Apache Reverse Proxy
-- `deploy/vulnarchive-web.service` – lokaler Archivdienst
+- `deploy/vulnarchive-web.service` – öffentliche Read-only-App
+- `deploy/vulnarchive-review.service` – private administrative Oberfläche
 - `deploy/vulnarchive-sync.service` – kontinuierlicher Import und Publisher
 - `deploy/vulnarchive-sync.timer` – 15-Minuten-Timer
 - `src/fd_sightings/policy.py` – Entscheidungsmodell
@@ -270,13 +255,13 @@ Die produktiven Werte kommen aus der Umgebung:
 
 Der API-Schlüssel ist nicht im Projekt und nicht im Handover enthalten.
 
-`VA_GNA_ORG_UUID` muss mit der dauerhaft verwendeten `local_instance_uuid` der Vulnerability-Lookup-Instanz abgestimmt werden. Nach erster Publikation darf diese UUID nicht mehr geändert werden.
+`VA_GNA_ORG_UUID` ist die dauerhaft verwendete Herausgeberidentität. Nach erster Publikation darf diese UUID nicht mehr geändert werden.
 
 ## Tests und Verifikation
 
 Letzter lokaler Teststand:
 
-- 15 Tests erfolgreich.
+- 18 Tests erfolgreich.
 - Python-Kompilierungsprüfung erfolgreich.
 - Editable-Installation in `.venv` erfolgreich.
 - Ein real erzeugter Beispielrecord bestand den offiziellen GCVE-BCP-05-Validator mit `--fail-on-warning`.
@@ -304,21 +289,12 @@ Die GNA-Registrierung selbst ist online und nennt Website sowie Dump-URL. Der ei
 
 ## Nächste Schritte in empfohlener Reihenfolge
 
-1. Zugriff auf den Server von `vuln.freearchive.org` herstellen.
-2. Apache-Standardseite deaktivieren.
-3. Die festgelegte Vulnerability-Lookup-Version v2.13.0 mit den Artefakten unter
-   `deploy/` installieren und konfigurieren (nicht `main`/`latest`).
-4. `local_instance_name` auf `gna-1988` setzen.
-5. Stabile Instanz-/GNA-UUID festlegen und sichern.
-6. Publikationskonto mit minimal erforderlichen API-Rechten erstellen.
-7. Collector nach `/opt/vulnarchive` übertragen.
-8. `/etc/vulnarchive/vulnarchive.env` mit echtem API-Schlüssel erstellen.
-9. systemd-Dienste und Apache-VHost installieren.
-10. Noch keinen Timer aktivieren; zuerst Verbindung und Dry Run prüfen.
-11. Einen einzelnen kontrollierten Testrecord publizieren.
-12. BCP-03, BCP-05, Archiv-URL, Sighting und Dump öffentlich prüfen.
-13. GCVE-GNA-Verzeichnis um `gcve_pull_api` ergänzen beziehungsweise korrigieren.
-14. Erst danach historischen Backfill und den 15-Minuten-Timer aktivieren.
+1. Zugriff auf den Server von `vuln.freearchive.org` herstellen und die Apache-Standardseite deaktivieren.
+2. Collector nach `/opt/vulnarchive` übertragen und die getrennten Public-/Review-Units installieren.
+3. `/etc/vulnarchive/vulnarchive.env` mit privatem Publikationsziel und echtem API-Schlüssel erstellen.
+4. Apache-VHost installieren und verifizieren, dass administrative sowie schreibende Pfade öffentlich 404/405 liefern.
+5. Noch keinen Timer aktivieren; zuerst Verbindung, Dry Run, BCP-03, Dump, Archiv und Security-Text prüfen.
+6. Einen einzelnen kontrollierten Testrecord publizieren und erst danach historischen Backfill sowie den 15-Minuten-Timer aktivieren.
 
 ## Bekannte Grenzen
 
