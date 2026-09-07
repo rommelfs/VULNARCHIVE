@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS observations (
     status TEXT NOT NULL DEFAULT 'pending',
     review_state TEXT NOT NULL DEFAULT 'pending',
     reviewed_vulnerability_id TEXT NOT NULL DEFAULT '',
+    reviewed_vulnerability_ids_json TEXT NOT NULL DEFAULT '[]',
     reviewed_sighting_type TEXT NOT NULL DEFAULT '',
     review_note TEXT NOT NULL DEFAULT '',
     reviewed_at TEXT,
@@ -67,9 +69,22 @@ CREATE TABLE IF NOT EXISTS gcve_reservations (
     UNIQUE (gna_id, publication_year, serial)
 );
 CREATE TABLE IF NOT EXISTS gcve_records (
-    gcve_id TEXT PRIMARY KEY,
+    vuln_id TEXT PRIMARY KEY,
+    source_url TEXT NOT NULL,
     record_json TEXT NOT NULL,
-    published_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    record_type TEXT NOT NULL,
+    assigner TEXT NOT NULL,
+    reserved_at TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    product_normalized TEXT,
+    vendor_normalized TEXT,
+    cwe_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS gcve_year_sequences (
+    year INTEGER PRIMARY KEY CHECK (year BETWEEN 1000 AND 9999),
+    last_serial INTEGER NOT NULL CHECK (last_serial >= 0),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -88,10 +103,41 @@ class Store:
         self._migrate()
 
     def _migrate(self) -> None:
+        record_columns = {row[1] for row in self.db.execute("PRAGMA table_info(gcve_records)")}
+        if "vuln_id" not in record_columns:
+            # Merge-era databases used a second, incompatible two-column GCVE
+            # table.  Rebuild it once and recover its canonical records before
+            # creating indexes used by the local publication API.
+            self.db.execute("ALTER TABLE gcve_records RENAME TO gcve_records_legacy")
+            self.db.execute("""CREATE TABLE gcve_records (
+                vuln_id TEXT PRIMARY KEY, source_url TEXT NOT NULL,
+                record_json TEXT NOT NULL, record_type TEXT NOT NULL,
+                assigner TEXT NOT NULL, reserved_at TEXT NOT NULL,
+                published_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                product_normalized TEXT, vendor_normalized TEXT,
+                cwe_json TEXT NOT NULL DEFAULT '[]')""")
+            for identifier, encoded, stored_published in self.db.execute(
+                "SELECT gcve_id, record_json, published_at FROM gcve_records_legacy"
+            ).fetchall():
+                record = json.loads(encoded)
+                defaults = self._record_defaults(record)
+                published = str(defaults["published_at"] or stored_published)
+                updated = str(defaults["updated_at"] or published)
+                self._insert_canonical_record(str(identifier), "legacy", record, published, published, updated)
+            self.db.execute("DROP TABLE gcve_records_legacy")
+        self.db.executescript("""
+            CREATE INDEX IF NOT EXISTS gcve_records_chronological_idx
+                ON gcve_records (updated_at, published_at, vuln_id);
+            CREATE INDEX IF NOT EXISTS gcve_records_assigner_idx
+                ON gcve_records (assigner, updated_at, vuln_id);
+            CREATE INDEX IF NOT EXISTS gcve_records_product_idx
+                ON gcve_records (product_normalized, updated_at, vuln_id);
+        """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(observations)")}
         additions = {
             "review_state": "TEXT NOT NULL DEFAULT 'pending'",
             "reviewed_vulnerability_id": "TEXT NOT NULL DEFAULT ''",
+            "reviewed_vulnerability_ids_json": "TEXT NOT NULL DEFAULT '[]'",
             "reviewed_sighting_type": "TEXT NOT NULL DEFAULT ''",
             "review_note": "TEXT NOT NULL DEFAULT ''",
             "reviewed_at": "TEXT",
@@ -102,6 +148,10 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        self.db.execute(
+            """UPDATE observations SET reviewed_vulnerability_ids_json=json_array(reviewed_vulnerability_id)
+            WHERE reviewed_vulnerability_id<>'' AND reviewed_vulnerability_ids_json='[]'"""
+        )
         publication_columns = {row[1] for row in self.db.execute("PRAGMA table_info(automatic_publications)")}
         for name in ("reserved_at", "published_at"):
             if name not in publication_columns:
@@ -129,6 +179,29 @@ class Store:
     @staticmethod
     def _utc_now() -> str:
         return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    @staticmethod
+    def _utc_iso(value: datetime) -> str:
+        if value.tzinfo is None:
+            raise ValueError("timestamps must include a timezone")
+        return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+    @staticmethod
+    def _normalize_stored_timestamp(value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return Store._utc_iso(parsed)
+
+    @staticmethod
+    def _parse_timestamp(value: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("since must be an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("since must include a timezone")
+        return Store._utc_iso(parsed)
 
     @staticmethod
     def _record_id(record: dict[str, Any]) -> str:
@@ -230,6 +303,22 @@ class Store:
         )
         self.db.commit()
         return vuln_id
+
+    def _insert_canonical_record(
+        self, vuln_id: str, source_url: str, record: dict[str, Any],
+        reserved_at: str, published_at: str, updated_at: str,
+    ) -> None:
+        defaults = self._record_defaults(record)
+        self.db.execute(
+            """INSERT OR REPLACE INTO gcve_records
+            (vuln_id, source_url, record_json, record_type, assigner, reserved_at,
+             published_at, updated_at, product_normalized, vendor_normalized, cwe_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (vuln_id.upper(), source_url, json.dumps(record, ensure_ascii=False, sort_keys=True),
+             defaults["record_type"], defaults["assigner"], reserved_at, published_at,
+             updated_at, defaults["product_normalized"], defaults["vendor_normalized"],
+             json.dumps(defaults["cwes"])),
+        )
 
     def update_gcve_record(
         self,
@@ -353,7 +442,7 @@ class Store:
 
     def _decode(self, row: sqlite3.Row, include_body: bool = False) -> dict[str, object]:
         item = dict(row)
-        for key in ("links_json", "extraction_json", "matches_json"):
+        for key in ("links_json", "extraction_json", "matches_json", "reviewed_vulnerability_ids_json"):
             item[key.removesuffix("_json")] = json.loads(str(item.pop(key)))
         if not include_body:
             item.pop("body", None)
@@ -381,16 +470,23 @@ class Store:
         row = self.db.execute("SELECT * FROM observations WHERE source_url = ?", (source_url,)).fetchone()
         return self._decode(row, include_body=True) if row else None
 
-    def review(self, source_url: str, state: str, vulnerability_id: str = "", sighting_type: str = "", note: str = "") -> None:
+    def review(
+        self, source_url: str, state: str,
+        vulnerability_ids: str | list[str] | tuple[str, ...] = (),
+        sighting_type: str = "", note: str = "",
+    ) -> None:
         if state not in {"pending", "approved", "rejected"}:
             raise ValueError("invalid review state")
-        if state == "approved" and (not vulnerability_id or sighting_type not in {"seen", "published-proof-of-concept"}):
-            raise ValueError("approved observations require a vulnerability ID and valid sighting type")
+        candidates = [vulnerability_ids] if isinstance(vulnerability_ids, str) else list(vulnerability_ids)
+        identifiers = list(dict.fromkeys(value.strip().upper() for value in candidates if value.strip()))
+        if state == "approved" and sighting_type not in {"seen", "published-proof-of-concept"}:
+            raise ValueError("approved observations require a valid sighting type")
         self.db.execute(
-            """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?,
+            """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
             reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
             WHERE source_url=?""",
-            (state, vulnerability_id.upper(), sighting_type, note[:2000], source_url),
+            (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+             sighting_type, note[:2000], source_url),
         )
         self.db.commit()
 
@@ -480,6 +576,11 @@ class Store:
                 updated_at,
             ),
         )
+        if kind == "gcve" and status == "published" and gcve_id and isinstance(payload_value, dict):
+            self._insert_canonical_record(
+                gcve_id, source_url, payload_value, str(reserved_at or timestamp),
+                str(published_at or timestamp), str(updated_at),
+            )
         self.db.commit()
 
     def reserve_gcve(self, source_url: str, publication_key: str, gna_id: int, year: int) -> str:
@@ -512,7 +613,6 @@ class Store:
         self, source_url: str, publication_key: str, gcve_id: str, record: object
     ) -> None:
         """Atomically make a record public and mark its ledger entry published."""
-        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             reservation = self.db.execute(
@@ -521,10 +621,10 @@ class Store:
             ).fetchone()
             if not reservation or reservation[0] != gcve_id:
                 raise ValueError(f"{gcve_id} is not reserved for this publication")
-            self.db.execute(
-                "INSERT OR REPLACE INTO gcve_records (gcve_id, record_json) VALUES (?, ?)",
-                (gcve_id, encoded),
-            )
+            if not isinstance(record, dict):
+                raise ValueError("GCVE record must be a JSON object")
+            timestamp = self._utc_now()
+            self._insert_canonical_record(gcve_id, source_url, record, timestamp, timestamp, timestamp)
             self._upsert_publication(
                 source_url, publication_key, "gcve", gcve_id=gcve_id,
                 status="published", payload=record,
@@ -543,8 +643,8 @@ class Store:
         old_payload, old_response = row if row else ("{}", "{}")
         self.db.execute(
             """INSERT INTO automatic_publications
-            (source_url, publication_key, kind, target_id, gcve_id, status, payload_json, response_json, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (source_url, publication_key, kind, target_id, gcve_id, status, payload_json, response_json, error, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_url, publication_key) DO UPDATE SET
               kind=excluded.kind, target_id=excluded.target_id,
               gcve_id=CASE WHEN excluded.gcve_id='' THEN automatic_publications.gcve_id ELSE excluded.gcve_id END,
@@ -552,13 +652,37 @@ class Store:
               response_json=excluded.response_json, error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
             (source_url, publication_key, kind, target_id, gcve_id, status,
              json.dumps(payload) if payload is not None else old_payload,
-             json.dumps(response) if response is not None else old_response, error[:4000]),
+             json.dumps(response) if response is not None else old_response, error[:4000], self._utc_now()),
         )
+
+    def gcve_records(self, *, date_sort: str = "", since: str | None = None) -> list[dict[str, object]]:
+        """Return publication-ledger metadata for compatibility and auditing."""
+        sort = date_sort or "updated"
+        if sort not in {"published", "updated", "reserved"}:
+            raise ValueError("date_sort must be published, updated, reserved, or empty")
+        params: list[str] = []
+        where = "kind='gcve' AND status='published'"
+        if since is not None:
+            boundary = self._parse_timestamp(since)
+            where += " AND (published_at > ? OR updated_at > ?)"
+            params.extend((boundary, boundary))
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            f"SELECT * FROM automatic_publications WHERE {where} "
+            f"ORDER BY {sort}_at DESC, gcve_id ASC", params,
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["record"] = json.loads(str(item.pop("payload_json")))
+            item.pop("response_json")
+            result.append(item)
+        return result
 
     def bcp03_publications(self) -> list[dict[str, object]]:
         """Return committed records in the order expected by a BCP-03 pull endpoint."""
         return [json.loads(row[0]) for row in self.db.execute(
-            "SELECT record_json FROM gcve_records ORDER BY gcve_id"
+            "SELECT record_json FROM gcve_records ORDER BY vuln_id"
         )]
 
     def automatic_candidates(self, limit: int = 0) -> list[dict[str, object]]:
@@ -569,7 +693,24 @@ class Store:
         if limit:
             query += " LIMIT ?"
             params = (limit,)
-        return [self._decode(row, include_body=True) for row in self.db.execute(query, params)]
+        candidates = [self._decode(row, include_body=True) for row in self.db.execute(query, params)]
+        for candidate in candidates:
+            if candidate["review_state"] != "approved":
+                continue
+            existing = {
+                str(match.get("vulnerability_id", "")).upper(): match
+                for match in candidate["matches"] if isinstance(match, dict)
+            }
+            candidate["matches"] = [
+                existing.get(identifier, {
+                    "vulnerability_id": identifier,
+                    "method": "analyst-approved",
+                    "confidence": 1.0,
+                    "title": "",
+                })
+                for identifier in candidate["reviewed_vulnerability_ids"]
+            ]
+        return candidates
 
     def publication_rows(self) -> list[dict[str, object]]:
         self.db.row_factory = sqlite3.Row
@@ -583,11 +724,15 @@ class Store:
         return result
 
     def public_gcve_records(self) -> list[dict[str, object]]:
-        """Return only successfully published GCVE payloads for the public feed."""
-        self.db.row_factory = sqlite3.Row
-        rows = self.db.execute(
-            """SELECT payload_json FROM automatic_publications
-            WHERE kind='gcve' AND status='published'
-            ORDER BY json_extract(payload_json, '$.cveMetadata.dateUpdated'), gcve_id"""
-        ).fetchall()
-        return [json.loads(str(row["payload_json"])) for row in rows]
+        """Compatibility alias for the single canonical local GCVE store."""
+        return self.published_gcve_records()
+
+    def published_gcve_records(self) -> list[dict[str, object]]:
+        """Return the canonical records consumed by all public representations."""
+        local_org = os.getenv("VA_GNA_ORG_UUID", "").casefold()
+        return [record for record in self.dump_gcve_records()
+                if self._record_id(record).startswith("GCVE-1988-")
+                and str(record.get("cveMetadata", {}).get("state", "")).upper() == "PUBLISHED"
+                and (not local_org or str(
+                    record.get("cveMetadata", {}).get("assignerOrgId", "")
+                ).casefold() == local_org)]

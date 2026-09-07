@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -20,7 +21,9 @@ class PublicUITest(unittest.TestCase):
             record = {
                 "dataType": "CVE_RECORD",
                 "dataVersion": "5.2",
-                "cveMetadata": {"vulnId": f"GCVE-1988-2026-{serial}", "dateUpdated": updated},
+                "cveMetadata": {"vulnId": f"GCVE-1988-2026-{serial}", "state": "PUBLISHED",
+                                "assignerOrgId": os.getenv("VA_GNA_ORG_UUID", ""),
+                                "datePublished": updated, "dateUpdated": updated},
             }
             self.store.save_publication(
                 f"source-{serial}", f"gcve:{serial}", "gcve", gcve_id=record["cveMetadata"]["vulnId"],
@@ -43,18 +46,17 @@ class PublicUITest(unittest.TestCase):
             return response.status, response.read(), response.headers.get_content_type()
 
     def test_publication_pagination_and_since(self) -> None:
-        _, body, content_type = self.get("/api/gcve/publication?since=2026-09-02T00%3A00%3A00Z&per_page=1")
+        _, body, content_type = self.get("/api/gcve/publication?date_sort=updated&since=2026-09-02T00%3A00%3A00Z&per_page=1")
         value = json.loads(body)
         self.assertEqual("application/json", content_type)
-        self.assertEqual(["GCVE-1988-2026-2"], [item["cveMetadata"]["vulnId"] for item in value["data"]])
-        self.assertEqual(1, value["metadata"]["total"])
+        self.assertEqual(["GCVE-1988-2026-2"], [item["cveMetadata"]["vulnId"] for item in value])
 
     def test_dump_and_security_txt_are_public(self) -> None:
         _, dump, content_type = self.get("/dumps/gna-1988.ndjson")
         self.assertEqual("application/x-ndjson", content_type)
         self.assertEqual(2, len(dump.splitlines()))
         _, security, _ = self.get("/.well-known/security.txt")
-        self.assertTrue(security.startswith(b"Contact:"))
+        self.assertEqual(b"GCVE: https://vuln.freearchive.org\n", security)
 
     def test_admin_and_write_routes_are_unavailable(self) -> None:
         for path in ("/review", "/connection", "/publish", "/observation"):

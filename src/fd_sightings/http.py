@@ -68,8 +68,8 @@ class Client:
                 raise RuntimeError(f"Request failed for {url}: {exc.reason}") from exc
         raise AssertionError("unreachable")
 
-    def get_text(self, url: str) -> str:
-        return self.request(url)[1]
+    def get_text(self, url: str, *, retries: int = 3) -> str:
+        return self.request(url, retries=retries)[1]
 
     def get_json(self, url: str, params: dict[str, str] | None = None) -> Any:
         if params:
