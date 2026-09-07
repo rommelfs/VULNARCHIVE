@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import urllib.parse
 import html
-from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from .public_api import publication_response
+from .dump import ndjson_lines
 from .review_ui import _e
 from .store import Store
 
@@ -17,13 +17,6 @@ def _public_layout(title: str, content: str) -> bytes:
 <style>body{{max-width:960px;margin:2rem auto;padding:0 1rem;font:16px/1.5 system-ui,sans-serif;color:#1d242c}}
 a{{color:#315e52}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:1rem}}</style>
 </head><body><header><a href="/"><strong>VULNARCHIVE</strong></a></header><main>{content}</main></body></html>""".encode()
-
-
-def _timestamp(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("timezone is required")
-    return parsed
 
 
 class PublicServer(HTTPServer):
@@ -61,18 +54,13 @@ class PublicHandler(BaseHTTPRequestHandler):
 <li><a href=\"/archive/\">Full Disclosure archive</a></li></ul></div>""")
             self._send(body, "text/html; charset=utf-8")
         elif parsed.path == "/api/gcve/publication":
-            self._publications(urllib.parse.parse_qs(parsed.query))
+            status, body = publication_response(self.server.store, parsed.query)
+            self._send(body, "application/json", status)
         elif parsed.path == "/dumps/gna-1988.ndjson":
-            records = self.server.store.public_gcve_records()
-            body = b"".join(json.dumps(item, ensure_ascii=False).encode() + b"\n" for item in records)
+            body = b"".join(ndjson_lines(self.server.store))
             self._send(body, "application/x-ndjson", Content_Disposition='attachment; filename="gna-1988.ndjson"')
         elif parsed.path == "/.well-known/security.txt":
-            contact = os.getenv("VA_SECURITY_CONTACT", "mailto:security@freearchive.org")
-            expires = os.getenv(
-                "VA_SECURITY_EXPIRES",
-                (datetime.now(timezone.utc) + timedelta(days=180)).isoformat(timespec="seconds").replace("+00:00", "Z"),
-            )
-            self._send(f"Contact: {contact}\nExpires: {expires}\nCanonical: https://vuln.freearchive.org/.well-known/security.txt\n".encode(), "text/plain; charset=utf-8")
+            self._send(b"GCVE: https://vuln.freearchive.org\n", "text/plain; charset=utf-8")
         elif parsed.path == "/archive/":
             self._archive_index()
         elif parsed.path.startswith("/archive/full-disclosure/"):
@@ -83,27 +71,6 @@ class PublicHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._json({"error": "method not allowed"}, 405, Allow="GET")
-
-    def _publications(self, params: dict[str, list[str]]) -> None:
-        try:
-            page = int(params.get("page", ["1"])[0])
-            per_page = int(params.get("per_page", ["100"])[0])
-            if page < 1 or not 1 <= per_page <= 100:
-                raise ValueError
-            records = self.server.store.public_gcve_records()
-            if "since" in params:
-                since = _timestamp(params["since"][0])
-                records = [r for r in records if _timestamp(str(r.get("cveMetadata", {}).get("dateUpdated", ""))) >= since]
-        except (ValueError, TypeError):
-            self._json({"error": "invalid page, per_page, or since parameter"}, 400)
-            return
-        start = (page - 1) * per_page
-        selected = records[start:start + per_page]
-        metadata: dict[str, object] = {"page": page, "per_page": per_page, "total": len(records)}
-        if start + per_page < len(records):
-            query = urllib.parse.urlencode({**{k: v[0] for k, v in params.items()}, "page": page + 1, "per_page": per_page})
-            metadata["next"] = f"/api/gcve/publication?{query}"
-        self._json({"data": selected, "metadata": metadata})
 
     def _archive_index(self) -> None:
         rows = self.server.store.rows()

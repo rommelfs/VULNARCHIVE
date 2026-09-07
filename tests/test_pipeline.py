@@ -11,6 +11,7 @@ from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
 from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
 from fd_sightings.cli import make_parser
+from fd_sightings.public_api import publication_response
 
 
 class FakeClient:
@@ -67,7 +68,7 @@ class ParserTests(unittest.TestCase):
                 status, body = publication_response(store, "date_sort=published&sort_order=asc&per_page=1&page=1")
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)[0]["cveMetadata"]["vulnId"], "GCVE-1988-2026-0001")
-                status, body = publication_response(store, "product=wIdGeT&assigner=vulnarchive&cwe=79&since=2026-01-15T00%3A00%3A00%2B00%3A00")
+                status, body = publication_response(store, "product=wIdGeT&assigner=vulnarchive&cwe=79&date_sort=updated&since=2026-01-15T00%3A00%3A00%2B00%3A00")
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body), [first])
                 status, body = publication_response(store, "page=99")
