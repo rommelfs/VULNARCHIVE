@@ -17,9 +17,11 @@ The GCVE Best Current Practices supplied with this repository are indexed in
 - SQLite checkpoints and idempotent re-runs
 - Original source retention with SHA-256, format, and Message-ID when available
 - CVE, GCVE, GHSA, CWE, and CVSS extraction
+- Static affected-version and vulnerability-class extraction
 - Evidence-based `seen` versus `published-proof-of-concept` proposal
 - Exact Vulnerability-Lookup resolution for explicit identifiers
 - Conservative product/title candidate matching for ID-less posts
+- Auditable candidate evidence and contradiction-aware CWE/version comparison
 - JSON Lines review export
 - Local analyst review interface with filters, detail view, approval, rejection, match override, and notes
 - Explicit, single-observation Sighting submission

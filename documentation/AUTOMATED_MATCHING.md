@@ -67,8 +67,11 @@ The current pipeline now applies the following unattended-publication rules:
 1. Resolve identifiers explicitly present in the post. All resolved explicit
    identifiers are eligible references and use the BCP-05 `related` type.
 2. If no explicit identifier resolves, query Vulnerability-Lookup by the static
-   product hint and score title overlap.
-3. Retain every inferred result as a review candidate.
+   product hint and score title, product, CWE, and version evidence. A conflicting
+   CWE is retained as an explicit contradiction and caps the candidate below the
+   default unattended-publication threshold.
+3. Retain every inferred result, its supporting evidence, and contradictions as
+   a review candidate.
 4. Accept an inferred reference only if the best supported candidate reaches
    `VA_MIN_INFERRED_MATCH_CONFIDENCE` (default `0.92`) and leads the runner-up by
    at least `VA_MIN_INFERRED_MATCH_MARGIN` (default `0.08`).
@@ -91,9 +94,9 @@ than lowering them to increase match volume.
 1. **Build a labelled evaluation set.** Sample matched and unmatched historic
    posts; have two reviewers label exact match, related, and no match. Measure
    precision first, especially false references.
-2. **Improve structured extraction.** Add vendor, product, component, affected
-   versions, fixed versions, vulnerability class, and commit/advisory fields to
-   the stored extraction schema.
+2. **Extend structured extraction.** Affected-version and vulnerability-class
+   extraction is implemented. Add vendor, component, fixed versions, and
+   commit/advisory fields to the stored extraction schema.
 3. **Broaden candidate retrieval.** Query using aliases and multiple extracted
    terms, bound the number of results, cache responses, and record the API
    endpoint and retrieval time.

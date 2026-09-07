@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fd_sightings.extract import extract, product_hint
 from fd_sightings.parsers import parse_message, parse_month, parse_rss
-from fd_sightings.models import Match
+from fd_sightings.models import Extraction, Match, Message
 from fd_sightings.store import Store
 from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
@@ -143,6 +143,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(result.cve_ids, ["CVE-2026-77939"])
         self.assertEqual(result.cwe_ids, ["CWE-94"])
         self.assertEqual(result.product_hint, "Flextype")
+        self.assertEqual(result.vulnerability_types, ["code-execution"])
         self.assertEqual(result.proposed_type, "published-proof-of-concept")
         self.assertTrue(result.relevant)
 
@@ -163,6 +164,37 @@ class ParserTests(unittest.TestCase):
 
     def test_product_hint(self):
         self.assertEqual(product_hint("[ADVISORY] Cisco Catalyst 8000V v1.2 RCE"), "Cisco Catalyst 8000V")
+
+    def test_structured_version_extraction(self):
+        result = extract(Message(
+            "https://example.test/advisory", "Widget buffer overflow",
+            body="Widget versions before 2.4.1 permit a buffer overflow.",
+        ))
+        self.assertEqual(result.affected_versions, ["2.4.1"])
+        self.assertEqual(result.vulnerability_types, ["buffer-overflow"])
+
+    def test_candidate_match_records_evidence_and_caps_cwe_contradiction(self):
+        class CandidateClient:
+            def get_json(self, url, params=None):
+                return [{
+                    "cveMetadata": {"vulnId": "CVE-2026-1234"},
+                    "containers": {"cna": {
+                        "title": "Widget remote code execution",
+                        "descriptions": [{"value": "Widget 2.4.1 remote code execution"}],
+                        "affected": [{"vendor": "Example", "product": "Widget", "versions": [{"version": "2.4.1"}]}],
+                        "problemTypes": [{"descriptions": [{"cweId": "CWE-79"}]}],
+                    }},
+                }]
+
+        lookup = VulnerabilityLookup(CandidateClient(), "https://vuln.example")
+        extraction = Extraction(
+            product_hint="Widget", affected_versions=["2.4.1"], cwe_ids=["CWE-94"], relevant=True,
+        )
+        matches = lookup.match(Message("https://example.test", "Widget remote code execution"), extraction)
+        self.assertEqual(len(matches), 1)
+        self.assertIn("different-cwe", matches[0].contradictions)
+        self.assertIn("shared-version:2.4.1", matches[0].evidence)
+        self.assertLess(matches[0].confidence, PublicationPolicy().min_inferred_match_confidence)
 
     def test_review_workflow(self):
         with tempfile.TemporaryDirectory() as directory:
