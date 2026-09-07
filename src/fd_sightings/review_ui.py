@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import html
+import base64
+import ipaddress
+import os
 import re
 import secrets
 import urllib.parse
@@ -40,6 +43,17 @@ class ReviewServer(HTTPServer):
         super().__init__(address, ReviewHandler)
         self.store = store
         self.csrf_token = secrets.token_urlsafe(24)
+        self.auth_username = os.environ.get("VA_REVIEW_USERNAME", "")
+        self.auth_password = os.environ.get("VA_REVIEW_PASSWORD", "")
+        self.allowed_networks = _networks(os.environ.get("VA_REVIEW_ALLOWED_NETWORKS", "127.0.0.0/8"))
+        self.trusted_proxies = _networks(os.environ.get("VA_REVIEW_TRUSTED_PROXIES", "127.0.0.0/8"))
+
+
+def _networks(value: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    try:
+        return tuple(ipaddress.ip_network(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid review network configuration: {exc}") from exc
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -62,7 +76,41 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.send_header("Location", location)
         self.end_headers()
 
+    def _authorize(self) -> bool:
+        peer = ipaddress.ip_address(self.client_address[0])
+        client = peer
+        if any(peer in network for network in self.server.trusted_proxies):
+            forwarded = self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+            if forwarded:
+                try:
+                    client = ipaddress.ip_address(forwarded)
+                except ValueError:
+                    self._send(b"Invalid forwarded client address", 400, "text/plain; charset=utf-8")
+                    return False
+        if not any(client in network for network in self.server.allowed_networks):
+            self._send(b"Forbidden", 403, "text/plain; charset=utf-8")
+            return False
+        if not self.server.auth_username or not self.server.auth_password:
+            self._send(b"Review authentication is not configured", 503, "text/plain; charset=utf-8")
+            return False
+        expected = base64.b64encode(
+            f"{self.server.auth_username}:{self.server.auth_password}".encode()
+        ).decode()
+        supplied = self.headers.get("Authorization", "")
+        if not secrets.compare_digest(supplied, f"Basic {expected}"):
+            body = b"Authentication required"
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="VULNARCHIVE Review", charset="UTF-8"')
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+        return True
+
     def do_GET(self) -> None:
+        if not self._authorize():
+            return
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/":
@@ -78,6 +126,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(_layout("Not found", '<div class="panel"><h1>Not found</h1></div>'), 404)
 
     def do_POST(self) -> None:
+        if not self._authorize():
+            return
         if self.path == "/publish":
             self._publish()
             return

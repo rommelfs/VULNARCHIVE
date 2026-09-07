@@ -73,3 +73,18 @@ public and sync units separately. For upgrades, stop the timer, back up SQLite, 
 staging, validate BCP-03 pagination, `since` filtering, dump equivalence and archive
 URLs, then atomically deploy and restart. Restore both code and the matching database
 backup if rollback is required.
+
+## Authenticated review reverse proxy
+
+The review application requires HTTP Basic authentication and a client-IP allowlist.
+Set `VA_REVIEW_USERNAME` and a long random `VA_REVIEW_PASSWORD`. Set
+`VA_REVIEW_ALLOWED_NETWORKS` to the operator/VPN CIDRs and
+`VA_REVIEW_TRUSTED_PROXIES` only to the reverse proxy CIDRs. Forwarded client
+addresses are ignored from every other peer. The service fails closed with HTTP 503
+when credentials are absent.
+
+For the dedicated `review.vuln.freearchive.org` hostname, install
+`deploy/apache-review.vuln.freearchive.org.conf`. Its proxy overwrites
+`X-Forwarded-For` with Apache's authenticated TCP peer address, preventing clients
+from spoofing an allowed address. Obtain the matching TLS certificate, run
+`apachectl configtest`, and restrict TCP/8765 so only the proxy can reach it.
