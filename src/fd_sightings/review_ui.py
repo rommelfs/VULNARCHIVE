@@ -10,6 +10,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .store import Store
+from .workers import ImportWorkerManager
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
 
@@ -34,7 +35,7 @@ th{{color:var(--muted);font-size:12px;text-transform:uppercase}}.tag{{display:in
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px;border-radius:7px;max-height:520px;overflow:auto}}
 .grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}label{{display:block;font-weight:600;margin:12px 0 5px}}textarea{{width:100%;min-height:90px}}
 @media(max-width:800px){{.grid{{grid-template-columns:1fr}}table{{display:block;overflow:auto}}}}
-</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a></div></header><main>{content}</main></body></html>"""
+</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main>{content}</main></body></html>"""
     return page.encode("utf-8")
 
 
@@ -42,6 +43,7 @@ class ReviewServer(HTTPServer):
     def __init__(self, address: tuple[str, int], store: Store):
         super().__init__(address, ReviewHandler)
         self.store = store
+        self.workers = ImportWorkerManager(store.path)
         self.csrf_token = secrets.token_urlsafe(24)
         self.auth_username = os.environ.get("VA_REVIEW_USERNAME", "")
         self.auth_password = os.environ.get("VA_REVIEW_PASSWORD", "")
@@ -128,6 +130,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._detail(params.get("source", [""])[0])
         elif parsed.path == "/publish":
             self._publication_dashboard()
+        elif parsed.path == "/workers":
+            self._workers(params)
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
@@ -139,6 +143,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/publish":
             self._publish()
+            return
+        if self.path == "/workers":
+            self._start_worker()
             return
         if self.path != "/review":
             self._send(b"Not found", 404, "text/plain")
@@ -186,6 +193,48 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(_layout("Publish error", '<div class="panel"><h1>Unsupported publication mode</h1><p>VULNARCHIVE publishes only to its local BCP-03/BCP-05 store.</p></div>'), 400)
             return
         self._publish_automatic(data)
+
+    def _start_worker(self) -> None:
+        data = self._form_data()
+        if data is None:
+            return
+        try:
+            limit = int(data.get("limit", ["0"])[0] or 0)
+            job = self.server.workers.submit(
+                data.get("from_period", [""])[0],
+                data.get("to_period", [""])[0],
+                limit=limit,
+                semantic=data.get("semantic", [""])[0] == "1",
+            )
+        except (ValueError, OSError) as exc:
+            self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
+            return
+        self._redirect("/workers?" + urllib.parse.urlencode({"job": job["id"]}))
+
+    def _workers(self, params: dict[str, list[str]]) -> None:
+        jobs = self.server.workers.jobs()
+        selected = self.server.workers.get(params.get("job", [""])[0])
+        rows = "".join(
+            f'<tr><td><a href="{_e("/workers?" + urllib.parse.urlencode({"job": job["id"]}))}">{_e(job["id"][:10])}</a></td>'
+            f'<td>{_e(job["from_period"])} – {_e(job["to_period"])}</td><td class="{_e(job["status"])}">{_e(job["status"])}</td>'
+            f'<td>{_e(job["created_at"])}</td></tr>' for job in jobs
+        )
+        detail = ""
+        if selected:
+            log = self.server.workers.log_tail(selected)
+            detail = (f'<div class="panel"><h2>Worker {_e(selected["id"])}</h2>'
+                      f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected["return_code"])}</p>'
+                      f'<pre>{_e(log or "No output yet.")}</pre></div>')
+        content = f'''<div class="panel"><h1>Historical archive imports</h1>
+<p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
+<form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
+<div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" required></label>
+<label>To month <input type="month" name="to_period" min="2002-01" required></label>
+<label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
+<label><input type="checkbox" name="semantic" value="1" checked> Candidate matching</label><button>Start import worker</button></div></form></div>
+<div class="panel"><h2>Workers</h2><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
+<tbody>{rows or '<tr><td colspan="4">No import workers yet.</td></tr>'}</tbody></table></div>{detail}'''
+        self._send(_layout("Archive imports", content))
 
     def _publish_source(self, data: dict[str, list[str]]) -> None:
         from .policy import PublicationPolicy

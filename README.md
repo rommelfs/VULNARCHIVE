@@ -107,6 +107,11 @@ rejection, and review notes.
 
 The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
+Authenticated operators can also open **Archive imports** in the review interface
+to queue historical month ranges. These background jobs run sequentially, retain
+their status and logs below `data/workers/`, and import and match observations
+without publishing them.
+
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 
 ```sh

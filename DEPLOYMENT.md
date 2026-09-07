@@ -68,6 +68,13 @@ sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
 sudo systemctl enable --now vulnarchive-sync.timer
 ```
 
+The authenticated review UI includes an **Archive imports** page. Operators can
+queue a start month, end month, optional per-month limit, and whether candidate
+matching is enabled. Historical workers execute sequentially to limit upstream
+load and SQLite contention. Their JSON status and captured command output are
+stored in `/opt/vulnarchive/data/workers/`. Starting an archive worker imports
+observations only; publication remains a separate policy-controlled operation.
+
 Back up `/opt/vulnarchive/data`, configuration, and the publication ledger. Monitor the
 public and sync units separately.
 
