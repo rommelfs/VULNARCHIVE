@@ -1,6 +1,6 @@
 [project]
 name = "fd-sightings"
-version = "0.2.0"
+version = "0.3.0"
 description = "VULNARCHIVE GNA 1988 mailing-list archive and GCVE publication pipeline"
 requires-python = ">=3.11"
 dependencies = []

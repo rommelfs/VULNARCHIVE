@@ -25,7 +25,7 @@ The year component is the year in which the source mailing-list post was publish
 
 ## Existing identifiers and relationships
 
-Resolved CVE, GCVE, GHSA, or other supported identifiers are preserved. Contextual VULNARCHIVE records use explicit BCP-05 relationships. `related` is the default. Equivalence is not asserted automatically.
+Resolved CVE, GCVE, GHSA, or other supported identifiers are preserved. Contextual VULNARCHIVE records use explicit BCP-05 relationships. An identifier explicitly present in the source uses `related`. A match inferred from product and title information uses `possibly_related` and may be published unattended only when one candidate passes both the configured absolute-confidence threshold and the configured margin over the runner-up. Rejected candidates remain available for analyst review. Equivalence is not asserted automatically.
 
 ## Sightings
 
@@ -41,7 +41,7 @@ The collector stores the retrieved source representation, source URL, format, pu
 
 ## Configuration
 
-Minimum body length, evidence thresholds, product requirements, context-record creation, Sighting creation, maximum description length, and automatic year-range creation are deployment configuration. The active values are exposed by the `fd-sightings policy` command and the local publication dashboard.
+Minimum body length, evidence thresholds, inferred-match confidence and margin, product requirements, context-record creation, Sighting creation, maximum description length, and automatic year-range creation are deployment configuration. The active values are exposed by the `fd-sightings policy` command and the local publication dashboard.
 
 ## Removal
 
