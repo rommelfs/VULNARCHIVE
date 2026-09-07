@@ -17,6 +17,7 @@ class Result:
     extraction: Extraction
     matches: list[Match]
     skipped: bool = False
+    error: str = ""
 
 
 def process_urls(
@@ -37,10 +38,15 @@ def process_urls(
         if store.seen(url) and not refresh:
             results.append(Result(Message(url, ""), Extraction(), [], skipped=True))
             continue
-        html = source_client.get_text(url)
-        message = parse_message(html, url)
-        extraction = extract(message)
-        matches = lookup.match(message, extraction, semantic=semantic) if extraction.relevant else []
-        store.save(message, extraction, matches)
-        results.append(Result(message, extraction, matches))
+        try:
+            # One retry bounds a stalled archive item while allowing the rest of
+            # the month to continue and be summarized.
+            html = source_client.get_text(url, retries=1)
+            message = parse_message(html, url)
+            extraction = extract(message)
+            matches = lookup.match(message, extraction, semantic=semantic) if extraction.relevant else []
+            store.save(message, extraction, matches)
+            results.append(Result(message, extraction, matches))
+        except (OSError, RuntimeError, ValueError) as exc:
+            results.append(Result(Message(url, ""), Extraction(), [], error=str(exc)))
     return results

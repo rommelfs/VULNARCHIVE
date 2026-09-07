@@ -11,6 +11,9 @@ from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
 from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
 from fd_sightings.cli import make_parser
+from fd_sightings.public_api import publication_response
+from fd_sightings.http import HTTPError
+from fd_sightings.pipeline import process_urls
 
 
 class FakeClient:
@@ -37,6 +40,48 @@ marker_exists=yes
 
 
 class ParserTests(unittest.TestCase):
+    def test_import_continues_after_a_stalled_or_missing_message(self):
+        class SourceClient:
+            def __init__(self):
+                self.calls = []
+
+            def get_text(self, url, *, retries=3):
+                self.calls.append((url, retries))
+                if url.endswith("/broken"):
+                    raise RuntimeError("timed out")
+                return MESSAGE_HTML
+
+        class Lookup:
+            def match(self, message, extraction, semantic=True):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "import.sqlite")
+            source = SourceClient()
+            try:
+                results = process_urls(
+                    ["https://example.test/broken", "https://example.test/ok"],
+                    source_client=source, lookup=Lookup(), store=store,
+                )
+                self.assertEqual(results[0].error, "timed out")
+                self.assertFalse(results[1].error)
+                self.assertTrue(store.seen("https://example.test/ok"))
+                self.assertEqual(source.calls, [
+                    ("https://example.test/broken", 1),
+                    ("https://example.test/ok", 1),
+                ])
+            finally:
+                store.close()
+
+    def test_missing_optional_product_search_returns_no_candidates(self):
+        class MissingSearchClient:
+            def get_json(self, url, params=None):
+                raise HTTPError(404, "Not Found", "")
+
+        lookup = VulnerabilityLookup(MissingSearchClient(), "https://vuln.example")
+        self.assertEqual(lookup.product_candidates("Widget"), [])
+        self.assertEqual(lookup.product_candidates("Widget"), [])
+
     @staticmethod
     def _public_record(identifier, published, updated, product="Widget", assigner="VULNARCHIVE", cwe="CWE-79"):
         return {
@@ -67,7 +112,7 @@ class ParserTests(unittest.TestCase):
                 status, body = publication_response(store, "date_sort=published&sort_order=asc&per_page=1&page=1")
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)[0]["cveMetadata"]["vulnId"], "GCVE-1988-2026-0001")
-                status, body = publication_response(store, "product=wIdGeT&assigner=vulnarchive&cwe=79&since=2026-01-15T00%3A00%3A00%2B00%3A00")
+                status, body = publication_response(store, "product=wIdGeT&assigner=vulnarchive&cwe=79&date_sort=updated&since=2026-01-15T00%3A00%3A00%2B00%3A00")
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body), [first])
                 status, body = publication_response(store, "page=99")
@@ -132,6 +177,29 @@ class ParserTests(unittest.TestCase):
                 self.assertEqual(approved[0]["review_state"], "approved")
                 store.record_submission(message.source_url, "CVE-2026-77939", "published-proof-of-concept", {"ok": True})
                 self.assertEqual(store.approved(), [])
+            finally:
+                store.close()
+
+    def test_review_accepts_multiple_or_no_referenced_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "review.sqlite")
+            try:
+                first = parse_message(MESSAGE_HTML, "https://example.test/multiple")
+                extraction = extract(first)
+                store.save(first, extraction, [])
+                store.review(first.source_url, "approved", ["CVE-2026-1", "cve-2026-2", "CVE-2026-1"], "seen")
+                self.assertEqual(store.get(first.source_url)["reviewed_vulnerability_ids"],
+                                 ["CVE-2026-1", "CVE-2026-2"])
+                reviewed = store.automatic_candidates()[0]
+                self.assertEqual([match["vulnerability_id"] for match in reviewed["matches"]],
+                                 ["CVE-2026-1", "CVE-2026-2"])
+                second = parse_message(MESSAGE_HTML, "https://example.test/new-advisory")
+                store.save(second, extraction, [])
+                store.review(second.source_url, "approved", [], "seen")
+                self.assertEqual(store.get(second.source_url)["reviewed_vulnerability_ids"], [])
+                no_id = next(row for row in store.automatic_candidates()
+                             if row["source_url"] == second.source_url)
+                self.assertEqual(no_id["matches"], [])
             finally:
                 store.close()
 
