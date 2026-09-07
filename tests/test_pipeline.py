@@ -10,10 +10,10 @@ from fd_sightings.store import Store
 from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
 from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
-from fd_sightings.cli import make_parser
+from fd_sightings.cli import _summary, make_parser
 from fd_sightings.public_api import publication_response
 from fd_sightings.http import HTTPError
-from fd_sightings.pipeline import process_urls
+from fd_sightings.pipeline import Result, process_urls
 
 
 class FakeClient:
@@ -226,6 +226,17 @@ class ParserTests(unittest.TestCase):
         self.assertIn("different-cwe", matches[0].contradictions)
         self.assertIn("shared-version:2.4.1", matches[0].evidence)
         self.assertLess(matches[0].confidence, PublicationPolicy().min_inferred_match_confidence)
+
+    def test_import_summary_reports_match_and_llm_diagnostics(self):
+        match = Match(
+            "CVE-2026-1234", "llm-assisted", 0.91, "Widget",
+            ["llm-model:model-test", "llm-error:RuntimeError"], [],
+        )
+        result = Result(Message("source", "Widget"), Extraction(relevant=True), [match])
+        summary = _summary([result])
+        self.assertEqual(summary["match_methods"], {"llm-assisted": 1})
+        self.assertEqual(summary["llm_evaluated"], 1)
+        self.assertEqual(summary["llm_errors"], 1)
 
     def test_review_workflow(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -45,10 +45,15 @@ Set a meaningful user agent. A read-only Vulnerability-Lookup URL is optional fo
 
 ```sh
 export FD_USER_AGENT='VULNARCHIVE/0.2 (security-team@example.org)'
-export VL_URL='https://vuln.freearchive.org'
+export VL_URL='https://vulnerability.circl.lu'
 ```
 
 GCVE-1988 reservations and publications always use the canonical local SQLite store. A complete policy template is provided in `config/vulnarchive.env.example`.
+
+`VL_URL` must point to a full Vulnerability-Lookup instance with the general
+`/api/vulnerability/` search endpoint. The local VULNARCHIVE public service is
+not suitable: it intentionally exposes only the GNA-1988 BCP-03 publication
+feed and cannot supply the CVE candidate set required by LLM comparison.
 
 ## Pilot
 

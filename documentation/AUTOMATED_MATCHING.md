@@ -76,6 +76,12 @@ Every request uses `store: false` and a strict JSON schema. Only up to ten
 Vulnerability-Lookup candidates are sent. API errors or invalid model output
 degrade to the deterministic result and do not fail the mailing-list import.
 
+LLM comparison requires candidates. Configure `VL_URL` to a complete
+Vulnerability-Lookup deployment that supports product search; the restricted
+VULNARCHIVE public endpoint cannot be used as its own candidate source. Import
+summaries expose `match_methods`, `llm_evaluated`, and `llm_errors`, so a zero
+LLM count is distinguishable from a successful no-match decision.
+
 ## Implemented decision pipeline
 
 The current pipeline now applies the following unattended-publication rules:

@@ -79,6 +79,22 @@ class LLMMatcherTests(unittest.TestCase):
         self.assertIn("llm-model:model-test", matches[0].evidence)
         self.assertTrue(any(item.startswith("llm-input-sha256:") for item in matches[0].evidence))
 
+    def test_same_product_candidate_is_retained_for_llm_review(self):
+        class CandidateClient:
+            def get_json(inner_self, url, params=None):
+                record = json.loads(json.dumps(self.record))
+                record["containers"]["cna"]["title"] = "Unrelated wording"
+                return [record]
+
+        matcher = LLMMatcher(FakeResponsesClient(), "https://api.example", "secret", "model-test", "review")
+        lookup = VulnerabilityLookup(CandidateClient(), "https://vuln.example", llm=matcher)
+        matches = lookup.match(
+            Message("source", "Widget security issue", body="Widget issue"),
+            Extraction(product_hint="Widget", relevant=True),
+        )
+        self.assertEqual(matches[0].method, "llm-assisted")
+        self.assertEqual(matches[0].vulnerability_id, "CVE-2026-1234")
+
 
 if __name__ == "__main__":
     unittest.main()
