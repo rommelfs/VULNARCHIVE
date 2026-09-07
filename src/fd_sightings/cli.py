@@ -95,7 +95,7 @@ def make_parser() -> argparse.ArgumentParser:
 
 def _clients(args: argparse.Namespace) -> tuple[Client, VulnerabilityLookup]:
     api_key = os.getenv("VL_API_KEY", "")
-    source_client = Client(args.user_agent, min_interval=0.5)
+    source_client = Client(args.user_agent, timeout=15, min_interval=0.5)
     lookup_client = Client(args.user_agent, timeout=8, min_interval=1.6 if api_key else 3.1)
     return source_client, VulnerabilityLookup(lookup_client, args.vl_url, api_key)
 
@@ -104,14 +104,19 @@ def _progress(index: int, total: int, url: str) -> None:
     print(f"[{index}/{total}] {url}", file=sys.stderr)
 
 
-def _summary(results: list[Result]) -> dict[str, int]:
+def _summary(results: list[Result]) -> dict[str, object]:
     return {
         "total": len(results),
-        "processed": sum(not result.skipped for result in results),
+        "processed": sum(not result.skipped and not result.error for result in results),
         "skipped": sum(result.skipped for result in results),
+        "failed": sum(bool(result.error) for result in results),
         "relevant": sum(result.extraction.relevant for result in results if not result.skipped),
         "matched": sum(bool(result.matches) for result in results),
         "poc": sum(result.extraction.proposed_type == "published-proof-of-concept" for result in results if not result.skipped),
+        "errors": [
+            {"source": result.message.source_url, "error": result.error}
+            for result in results if result.error
+        ],
     }
 
 

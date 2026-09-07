@@ -60,6 +60,12 @@ Process a small historical sample:
 fd-sightings archive --from-period 2026-08 --to-period 2026-09 --limit 10
 ```
 
+Archive imports use a 15-second request timeout and one retry per message. A
+missing or stalled individual message is reported in the final `errors` list and
+does not stop the remaining month. Progress is printed before each fetch, so a
+healthy 121-message month still takes at least about a minute at the polite
+request interval.
+
 Process the current feed. Repeated runs skip URLs already stored:
 
 ```sh

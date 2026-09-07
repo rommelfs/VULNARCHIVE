@@ -13,6 +13,7 @@ from fd_sightings.publication import build_gcve_record, execute_automatic_public
 from fd_sightings.cli import make_parser
 from fd_sightings.public_api import publication_response
 from fd_sightings.http import HTTPError
+from fd_sightings.pipeline import process_urls
 
 
 class FakeClient:
@@ -39,6 +40,39 @@ marker_exists=yes
 
 
 class ParserTests(unittest.TestCase):
+    def test_import_continues_after_a_stalled_or_missing_message(self):
+        class SourceClient:
+            def __init__(self):
+                self.calls = []
+
+            def get_text(self, url, *, retries=3):
+                self.calls.append((url, retries))
+                if url.endswith("/broken"):
+                    raise RuntimeError("timed out")
+                return MESSAGE_HTML
+
+        class Lookup:
+            def match(self, message, extraction, semantic=True):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "import.sqlite")
+            source = SourceClient()
+            try:
+                results = process_urls(
+                    ["https://example.test/broken", "https://example.test/ok"],
+                    source_client=source, lookup=Lookup(), store=store,
+                )
+                self.assertEqual(results[0].error, "timed out")
+                self.assertFalse(results[1].error)
+                self.assertTrue(store.seen("https://example.test/ok"))
+                self.assertEqual(source.calls, [
+                    ("https://example.test/broken", 1),
+                    ("https://example.test/ok", 1),
+                ])
+            finally:
+                store.close()
+
     def test_missing_optional_product_search_returns_no_candidates(self):
         class MissingSearchClient:
             def get_json(self, url, params=None):
