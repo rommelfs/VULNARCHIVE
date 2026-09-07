@@ -363,11 +363,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
             f'{_e(match["vulnerability_id"])} — {_e(match["title"])} ({_e(match["confidence"])})</option>'
             for match in matches
         )
+        match_analysis = "".join(
+            f'<li><strong>{_e(match.get("vulnerability_id", ""))}</strong> · {_e(match.get("method", ""))} · {_e(match.get("confidence", 0))}'
+            f'<br><span class="muted">Evidence: {_e(", ".join(match.get("evidence", [])) or "none")}</span>'
+            f'<br><span class="rejected">Contradictions: {_e(", ".join(match.get("contradictions", [])) or "none")}</span></li>'
+            for match in matches
+        )
         evidence = "".join(f"<li>{_e(item)}</li>" for item in extraction.get("poc_evidence", []))
         content = f"""<p><a href="/">← Queue</a></p><div class="grid"><section>
 <div class="panel"><h1>{_e(row['title'])}</h1><p class="muted">{_e(row['author'])} · {_e(row['published'])}</p>
 <p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open Full Disclosure source</a></p>
 <h3>Extraction</h3><p>Product: <strong>{_e(extraction.get('product_hint',''))}</strong> · Proposed type: <strong>{_e(extraction.get('proposed_type',''))}</strong> · PoC score: <strong>{_e(extraction.get('poc_score',0))}</strong></p><ul>{evidence or '<li>No PoC indicators</li>'}</ul>
+<h3>Candidate analysis</h3><ul>{match_analysis or '<li>No candidates</li>'}</ul>
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
 <p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
 <form method="post" action="/review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="source" value="{_e(source)}">

@@ -127,7 +127,7 @@ def reference_targets(row: dict[str, object], policy: PublicationPolicy) -> tupl
     inferred = sorted(
         (
             match for match in matches
-            if match.get("method") == "product-title-overlap" and match.get("vulnerability_id")
+            if match.get("method") in {"product-title-overlap", "llm-automatic"} and match.get("vulnerability_id")
         ),
         key=lambda match: float(match.get("confidence") or 0),
         reverse=True,

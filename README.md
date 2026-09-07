@@ -169,6 +169,11 @@ The staged matching design, including optional LLM-assisted analysis and its
 required safeguards, is documented in
 [`documentation/AUTOMATED_MATCHING.md`](documentation/AUTOMATED_MATCHING.md).
 
+To pilot LLM comparison safely, set `OPENAI_API_KEY`, `VA_LLM_MODEL`, and
+`VA_LLM_MODE=shadow`. After evaluating retained decisions, use `review` to route
+model selections to analysts. `automatic` should only be enabled after the
+precision target and data-protection review described in the matching guide.
+
 ## Local publication store and public service
 
 The collector reserves and publishes GCVE-1988 records transactionally in its canonical SQLite store. `VL_URL` is optional and only supports read-only resolution of foreign identifiers. Run the isolated public service with `fd-sightings public`; deployment routing and the private review-service boundary are documented in `DEPLOYMENT.md`.
@@ -178,7 +183,7 @@ The public service exposes the same canonical records as a bare BCP-03 JSON list
 ## Matching policy
 
 - An explicit identifier that resolves receives confidence `1.0`.
-- ID-less reports use a deliberately conservative product and title overlap candidate. These matches never submit automatically.
+- ID-less reports use conservative product, title, version, and CWE candidates. They require review unless the explicitly enabled automatic LLM mode and the unattended confidence/margin policy both accept one clear winner.
 - Unmatched reports remain in SQLite and can be reprocessed with `--refresh` after new CVEs arrive.
 - A `Published Proof of Concept` proposal requires a PoC evidence score of at least three. Exploitation in the wild is never inferred from PoC availability.
 

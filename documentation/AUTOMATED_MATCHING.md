@@ -60,6 +60,22 @@ must be delimited; instructions contained in a post must never be treated as
 system instructions. Before using a hosted model, deployment owners must also
 approve data-protection, retention, and confidentiality implications.
 
+The OpenAI Responses API integration is implemented and disabled by default.
+Configure `OPENAI_API_KEY` and `VA_LLM_MODEL`, then select one mode:
+
+* `off`: no model request;
+* `shadow`: retain the model decision and audit evidence without changing the
+  deterministic candidate ranking;
+* `review`: let the model select from the bounded candidates, but cap its score
+  below the unattended threshold so an analyst must decide;
+* `automatic`: allow the selected candidate to pass through the same confidence
+  and runner-up gate as deterministic matches. Any reported contradiction caps
+  confidence below the default unattended threshold.
+
+Every request uses `store: false` and a strict JSON schema. Only up to ten
+Vulnerability-Lookup candidates are sent. API errors or invalid model output
+degrade to the deterministic result and do not fail the mailing-list import.
+
 ## Implemented decision pipeline
 
 The current pipeline now applies the following unattended-publication rules:
