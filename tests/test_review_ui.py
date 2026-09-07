@@ -7,6 +7,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 from fd_sightings.review_ui import ReviewServer
@@ -74,6 +75,59 @@ class ReviewUITest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as raised:
             urllib.request.urlopen(self.request("/", address="198.51.100.5"))
         self.assertEqual(raised.exception.code, 403)
+
+    def test_historical_import_worker_can_be_started_from_ui(self) -> None:
+        class Workers:
+            def __init__(self):
+                self.submitted = []
+
+            def submit(self, start, end, *, limit=0, semantic=False, refresh=False):
+                self.submitted.append((start, end, limit, semantic, refresh))
+                return {"id": "abc123"}
+
+            def jobs(self):
+                return [{
+                    "id": "abc123", "from_period": "2024-01", "to_period": "2024-03",
+                    "status": "queued", "created_at": "2026-09-07T12:00:00Z", "return_code": None,
+                }]
+
+            def get(self, job_id):
+                return self.jobs()[0] if job_id == "abc123" else None
+
+            def log_tail(self, job):
+                return ""
+
+        workers = Workers()
+        self.server.workers = workers
+        with urllib.request.urlopen(self.request("/workers")) as response:
+            page = response.read().decode()
+        self.assertIn("Historical archive imports", page)
+        self.assertIn('action="/review/workers"', page)
+
+        encoded = urllib.parse.urlencode({
+            "csrf": self.server.csrf_token,
+            "from_period": "2024-01",
+            "to_period": "2024-03",
+            "limit": "25",
+            "semantic": "1",
+            "refresh": "1",
+        }).encode()
+        request = self.request("/workers", method="POST")
+        request.data = encoded
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        with self.assertRaises(urllib.error.HTTPError) as redirected:
+            urllib.request.build_opener(NoRedirect()).open(request)
+        self.assertEqual(redirected.exception.code, 303)
+        self.assertIn("/review/workers?job=abc123", redirected.exception.headers["Location"])
+        self.assertEqual(workers.submitted, [("2024-01", "2024-03", 25, True, True)])
+        with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
+            live_page = response.read().decode()
+        self.assertIn('<meta http-equiv="refresh" content="2">', live_page)
+        self.assertIn("This view refreshes every 2 seconds.", live_page)
 
 
 if __name__ == "__main__":

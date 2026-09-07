@@ -28,6 +28,8 @@ class Extraction:
     cwe_ids: list[str] = field(default_factory=list)
     cvss_vectors: list[str] = field(default_factory=list)
     product_hint: str = ""
+    affected_versions: list[str] = field(default_factory=list)
+    vulnerability_types: list[str] = field(default_factory=list)
     poc_score: int = 0
     poc_evidence: list[str] = field(default_factory=list)
     relevant: bool = False
@@ -48,6 +50,8 @@ class Match:
     method: str
     confidence: float
     title: str = ""
+    evidence: list[str] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
