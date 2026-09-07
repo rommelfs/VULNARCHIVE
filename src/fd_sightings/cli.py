@@ -94,10 +94,14 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def _clients(args: argparse.Namespace) -> tuple[Client, VulnerabilityLookup]:
+    from .llm import LLMMatcher
     api_key = os.getenv("VL_API_KEY", "")
     source_client = Client(args.user_agent, timeout=15, min_interval=0.5)
     lookup_client = Client(args.user_agent, timeout=8, min_interval=1.6 if api_key else 3.1)
-    return source_client, VulnerabilityLookup(lookup_client, args.vl_url, api_key)
+    llm_client = Client(args.user_agent, timeout=45, min_interval=0.0)
+    return source_client, VulnerabilityLookup(
+        lookup_client, args.vl_url, api_key, LLMMatcher.from_env(llm_client)
+    )
 
 
 def _progress(index: int, total: int, url: str) -> None:
