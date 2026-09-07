@@ -56,7 +56,10 @@ class ImportWorkerManager:
             except (OSError, ValueError, TypeError):
                 continue
 
-    def submit(self, start: str, end: str, *, limit: int = 0, semantic: bool = True) -> dict[str, Any]:
+    def submit(
+        self, start: str, end: str, *, limit: int = 0,
+        semantic: bool = False, refresh: bool = False,
+    ) -> dict[str, Any]:
         first = _month_number(start)
         last = _month_number(end)
         if last < first:
@@ -73,6 +76,7 @@ class ImportWorkerManager:
             "to_period": end,
             "limit": limit,
             "semantic": semantic,
+            "refresh": refresh,
             "created_at": _now(),
             "started_at": "",
             "finished_at": "",
@@ -98,11 +102,14 @@ class ImportWorkerManager:
         ]
         if not job["semantic"]:
             command.append("--no-semantic")
+        if job.get("refresh"):
+            command.append("--refresh")
         command.extend(["archive", "--from-period", job["from_period"], "--to-period", job["to_period"]])
         if job["limit"]:
             command.extend(["--limit", str(job["limit"])])
         environment = os.environ.copy()
         environment.pop("VA_REVIEW_PASSWORD", None)
+        environment["PYTHONUNBUFFERED"] = "1"
         try:
             with Path(job["log"]).open("w", encoding="utf-8") as output:
                 result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, env=environment, check=False)

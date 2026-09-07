@@ -81,18 +81,18 @@ class ReviewUITest(unittest.TestCase):
             def __init__(self):
                 self.submitted = []
 
-            def submit(self, start, end, *, limit=0, semantic=True):
-                self.submitted.append((start, end, limit, semantic))
+            def submit(self, start, end, *, limit=0, semantic=False, refresh=False):
+                self.submitted.append((start, end, limit, semantic, refresh))
                 return {"id": "abc123"}
 
             def jobs(self):
                 return [{
                     "id": "abc123", "from_period": "2024-01", "to_period": "2024-03",
-                    "status": "queued", "created_at": "2026-09-07T12:00:00Z",
+                    "status": "queued", "created_at": "2026-09-07T12:00:00Z", "return_code": None,
                 }]
 
             def get(self, job_id):
-                return None
+                return self.jobs()[0] if job_id == "abc123" else None
 
             def log_tail(self, job):
                 return ""
@@ -110,6 +110,7 @@ class ReviewUITest(unittest.TestCase):
             "to_period": "2024-03",
             "limit": "25",
             "semantic": "1",
+            "refresh": "1",
         }).encode()
         request = self.request("/workers", method="POST")
         request.data = encoded
@@ -122,7 +123,11 @@ class ReviewUITest(unittest.TestCase):
             urllib.request.build_opener(NoRedirect()).open(request)
         self.assertEqual(redirected.exception.code, 303)
         self.assertIn("/review/workers?job=abc123", redirected.exception.headers["Location"])
-        self.assertEqual(workers.submitted, [("2024-01", "2024-03", 25, True)])
+        self.assertEqual(workers.submitted, [("2024-01", "2024-03", 25, True, True)])
+        with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
+            live_page = response.read().decode()
+        self.assertIn('<meta http-equiv="refresh" content="2">', live_page)
+        self.assertIn("This view refreshes every 2 seconds.", live_page)
 
 
 if __name__ == "__main__":

@@ -24,13 +24,14 @@ class ImportWorkerManagerTests(unittest.TestCase):
                 return Result()
 
             with patch("fd_sightings.workers.subprocess.run", side_effect=run):
-                job = manager.submit("2024-01", "2024-03", limit=25, semantic=False)
+                job = manager.submit("2024-01", "2024-03", limit=25, semantic=False, refresh=True)
                 manager.executor.shutdown(wait=True)
 
             stored = json.loads((database.parent / "workers" / f'{job["id"]}.json').read_text())
             self.assertEqual(stored["status"], "completed")
             command = captured[0]
             self.assertIn("--no-semantic", command)
+            self.assertIn("--refresh", command)
             self.assertEqual(command[-7:], [
                 "archive", "--from-period", "2024-01", "--to-period", "2024-03", "--limit", "25",
             ])

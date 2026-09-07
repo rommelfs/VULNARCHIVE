@@ -19,10 +19,11 @@ def _e(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
-def _layout(title: str, content: str) -> bytes:
+def _layout(title: str, content: str, *, refresh: int = 0) -> bytes:
+    refresh_meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_e(title)} · VULNARCHIVE</title><style>
+{refresh_meta}<title>{_e(title)} · VULNARCHIVE</title><style>
 :root{{--bg:#f5f3ee;--panel:#fff;--ink:#1d242c;--muted:#65707b;--line:#d8d4ca;--accent:#315e52;--warn:#9d6114;--bad:#983b3b}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}}
 header{{background:#18332d;color:white;padding:18px 28px}}header a{{color:white;text-decoration:none}}main{{max-width:1180px;margin:24px auto;padding:0 20px}}
@@ -205,6 +206,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 data.get("to_period", [""])[0],
                 limit=limit,
                 semantic=data.get("semantic", [""])[0] == "1",
+                refresh=data.get("refresh", [""])[0] == "1",
             )
         except (ValueError, OSError) as exc:
             self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
@@ -222,8 +224,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
         detail = ""
         if selected:
             log = self.server.workers.log_tail(selected)
+            feedback = "This view refreshes every 2 seconds." if selected["status"] in {"queued", "running"} else "Final output"
             detail = (f'<div class="panel"><h2>Worker {_e(selected["id"])}</h2>'
                       f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected["return_code"])}</p>'
+                      f'<p class="muted">{feedback}</p>'
                       f'<pre>{_e(log or "No output yet.")}</pre></div>')
         content = f'''<div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
@@ -231,10 +235,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" required></label>
 <label>To month <input type="month" name="to_period" min="2002-01" required></label>
 <label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
-<label><input type="checkbox" name="semantic" value="1" checked> Candidate matching</label><button>Start import worker</button></div></form></div>
+<label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
+<label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>
 <div class="panel"><h2>Workers</h2><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
 <tbody>{rows or '<tr><td colspan="4">No import workers yet.</td></tr>'}</tbody></table></div>{detail}'''
-        self._send(_layout("Archive imports", content))
+        auto_refresh = 2 if selected and selected["status"] in {"queued", "running"} else 0
+        self._send(_layout("Archive imports", content, refresh=auto_refresh))
 
     def _publish_source(self, data: dict[str, list[str]]) -> None:
         from .policy import PublicationPolicy

@@ -82,6 +82,25 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(lookup.product_candidates("Widget"), [])
         self.assertEqual(lookup.product_candidates("Widget"), [])
 
+    def test_identifier_lookups_are_cached_including_missing_records(self):
+        class LookupClient:
+            def __init__(self):
+                self.calls = 0
+
+            def get_json(self, url, params=None):
+                self.calls += 1
+                if url.endswith("CVE-2026-4040"):
+                    raise HTTPError(404, "Not Found", "")
+                return {"cveMetadata": {"vulnId": "CVE-2026-1234"}}
+
+        client = LookupClient()
+        lookup = VulnerabilityLookup(client, "https://vuln.example")
+        self.assertIsNotNone(lookup.lookup("CVE-2026-1234"))
+        self.assertIsNotNone(lookup.lookup("cve-2026-1234"))
+        self.assertIsNone(lookup.lookup("CVE-2026-4040"))
+        self.assertIsNone(lookup.lookup("cve-2026-4040"))
+        self.assertEqual(client.calls, 2)
+
     @staticmethod
     def _public_record(identifier, published, updated, product="Widget", assigner="VULNARCHIVE", cwe="CWE-79"):
         return {

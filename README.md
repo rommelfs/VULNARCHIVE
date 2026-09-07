@@ -110,7 +110,10 @@ The review interface has no connection or credential settings and performs no ex
 Authenticated operators can also open **Archive imports** in the review interface
 to queue historical month ranges. These background jobs run sequentially, retain
 their status and logs below `data/workers/`, and import and match observations
-without publishing them.
+without publishing them. The worker detail page refreshes its live output every
+two seconds. Candidate search is disabled by default for a faster explicit-ID
+first pass; enable it when semantic candidate retrieval is required, and select
+**Reprocess existing posts** when applying it to an already imported range.
 
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 
