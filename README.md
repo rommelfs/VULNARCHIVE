@@ -193,20 +193,11 @@ publication. VULNARCHIVE does not require a local Vulnerability-Lookup process. 
 separate read-only public service with `fd-sightings public`; deployment routing and the
 private review-service boundary are documented in `DEPLOYMENT.md`.
 
-### Publication timestamps and ordering
-
-The local publication ledger keeps three independent UTC timestamps: `reserved_at`
-for local GCVE-ID allocation, `published_at` for the first successful public
-publication, and `updated_at` for the most recent content change. They are serialized
-as ISO-8601 values ending in `Z`. A historical source date never initializes
-`published_at`; it remains provenance in `x_vulnarchive.sourcePublishedAt`.
-
-Publication queries accept `date_sort=published`, `date_sort=updated`, and
-`date_sort=reserved`. An omitted or empty `date_sort` defaults to `updated`. Ordering
-is newest first, with the GCVE ID ascending as a stable tie-breaker. The incremental
-filter is strict and means `published_at > since OR updated_at > since`; a record
-exactly at the boundary is therefore excluded. Input timestamps must be ISO-8601 and
-include a timezone.
+The archive service additionally exposes `GET /dumps/gna-1988.ndjson`. It pages
+through that canonical publication endpoint, filters for published
+`GCVE-1988-*` records, sorts them deterministically on disk, and streams compact
+UTF-8 NDJSON without a response envelope. Apache routes this one dump path to
+the archive service.
 
 ## Matching policy
 
