@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS observations (
     status TEXT NOT NULL DEFAULT 'pending',
     review_state TEXT NOT NULL DEFAULT 'pending',
     reviewed_vulnerability_id TEXT NOT NULL DEFAULT '',
+    reviewed_vulnerability_ids_json TEXT NOT NULL DEFAULT '[]',
     reviewed_sighting_type TEXT NOT NULL DEFAULT '',
     review_note TEXT NOT NULL DEFAULT '',
     reviewed_at TEXT,
@@ -136,6 +137,7 @@ class Store:
         additions = {
             "review_state": "TEXT NOT NULL DEFAULT 'pending'",
             "reviewed_vulnerability_id": "TEXT NOT NULL DEFAULT ''",
+            "reviewed_vulnerability_ids_json": "TEXT NOT NULL DEFAULT '[]'",
             "reviewed_sighting_type": "TEXT NOT NULL DEFAULT ''",
             "review_note": "TEXT NOT NULL DEFAULT ''",
             "reviewed_at": "TEXT",
@@ -146,6 +148,10 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        self.db.execute(
+            """UPDATE observations SET reviewed_vulnerability_ids_json=json_array(reviewed_vulnerability_id)
+            WHERE reviewed_vulnerability_id<>'' AND reviewed_vulnerability_ids_json='[]'"""
+        )
         publication_columns = {row[1] for row in self.db.execute("PRAGMA table_info(automatic_publications)")}
         for name in ("reserved_at", "published_at"):
             if name not in publication_columns:
@@ -436,7 +442,7 @@ class Store:
 
     def _decode(self, row: sqlite3.Row, include_body: bool = False) -> dict[str, object]:
         item = dict(row)
-        for key in ("links_json", "extraction_json", "matches_json"):
+        for key in ("links_json", "extraction_json", "matches_json", "reviewed_vulnerability_ids_json"):
             item[key.removesuffix("_json")] = json.loads(str(item.pop(key)))
         if not include_body:
             item.pop("body", None)
@@ -464,16 +470,23 @@ class Store:
         row = self.db.execute("SELECT * FROM observations WHERE source_url = ?", (source_url,)).fetchone()
         return self._decode(row, include_body=True) if row else None
 
-    def review(self, source_url: str, state: str, vulnerability_id: str = "", sighting_type: str = "", note: str = "") -> None:
+    def review(
+        self, source_url: str, state: str,
+        vulnerability_ids: str | list[str] | tuple[str, ...] = (),
+        sighting_type: str = "", note: str = "",
+    ) -> None:
         if state not in {"pending", "approved", "rejected"}:
             raise ValueError("invalid review state")
-        if state == "approved" and (not vulnerability_id or sighting_type not in {"seen", "published-proof-of-concept"}):
-            raise ValueError("approved observations require a vulnerability ID and valid sighting type")
+        candidates = [vulnerability_ids] if isinstance(vulnerability_ids, str) else list(vulnerability_ids)
+        identifiers = list(dict.fromkeys(value.strip().upper() for value in candidates if value.strip()))
+        if state == "approved" and sighting_type not in {"seen", "published-proof-of-concept"}:
+            raise ValueError("approved observations require a valid sighting type")
         self.db.execute(
-            """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?,
+            """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
             reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
             WHERE source_url=?""",
-            (state, vulnerability_id.upper(), sighting_type, note[:2000], source_url),
+            (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+             sighting_type, note[:2000], source_url),
         )
         self.db.commit()
 
@@ -680,7 +693,24 @@ class Store:
         if limit:
             query += " LIMIT ?"
             params = (limit,)
-        return [self._decode(row, include_body=True) for row in self.db.execute(query, params)]
+        candidates = [self._decode(row, include_body=True) for row in self.db.execute(query, params)]
+        for candidate in candidates:
+            if candidate["review_state"] != "approved":
+                continue
+            existing = {
+                str(match.get("vulnerability_id", "")).upper(): match
+                for match in candidate["matches"] if isinstance(match, dict)
+            }
+            candidate["matches"] = [
+                existing.get(identifier, {
+                    "vulnerability_id": identifier,
+                    "method": "analyst-approved",
+                    "confidence": 1.0,
+                    "title": "",
+                })
+                for identifier in candidate["reviewed_vulnerability_ids"]
+            ]
+        return candidates
 
     def publication_rows(self) -> list[dict[str, object]]:
         self.db.row_factory = sqlite3.Row

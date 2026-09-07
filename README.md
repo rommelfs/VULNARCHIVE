@@ -96,7 +96,7 @@ defaults to localhost when it is started outside the supplied systemd unit. The
 interface supports queue filters, source evidence, match overrides, approval,
 rejection, and review notes.
 
-The review interface has no connection or credential settings and performs no external writes. Its publication dashboard creates BCP-05 records transactionally in the local store; Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
+The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. The publication dashboard creates BCP-05 records transactionally in the local store; Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 

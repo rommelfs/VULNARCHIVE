@@ -14,6 +14,8 @@ The production boundary consists of:
 
 The public server exposes `/`, `/api/gcve/publication`, `/dumps/gna-1988.ndjson`, and `/archive/`. BCP-03 returns a bare JSON list. The dump contains exactly the canonical local publication set as compact NDJSON. `deploy/security.txt` advertises the public GCVE base and is mirrored by the direct application route.
 
+Review decisions support zero, one, or multiple referenced vulnerability IDs. Approved selections override automated matches for local publication; an empty selection deliberately creates a new advisory.
+
 ## Configuration
 
 Use `config/vulnarchive.env.example`. `VA_GNA_ORG_UUID` is the permanent publisher identity and must not change after publication. `VL_URL` is optional and only used for read-only lookup of foreign vulnerability identifiers; local GCVE publication requires no `VL_API_KEY`.

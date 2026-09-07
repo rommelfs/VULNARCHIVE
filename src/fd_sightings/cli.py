@@ -71,11 +71,6 @@ def make_parser() -> argparse.ArgumentParser:
     export.add_argument("--status", choices=["matched", "unmatched"])
     export.add_argument("--output", default="-")
 
-    submit = sub.add_parser("submit", help="Submit reviewed, matched observations as sightings")
-    submit.add_argument("--source-url", required=True)
-    submit.add_argument("--vulnerability-id", required=True)
-    submit.add_argument("--write", action="store_true", help="Required safety switch; otherwise show payload intent only")
-
     review = sub.add_parser("review", help="Run the local analyst review interface")
     review.add_argument("--bind", default="127.0.0.1")
     review.add_argument("--port", type=int, default=8765)
@@ -83,10 +78,6 @@ def make_parser() -> argparse.ArgumentParser:
     public = sub.add_parser("public", help="Run the read-only public archive and GCVE API")
     public.add_argument("--bind", default="127.0.0.1")
     public.add_argument("--port", type=int, default=8766)
-
-    approved = sub.add_parser("submit-approved", help="Process analyst-approved observations")
-    approved.add_argument("--limit", type=int, default=0)
-    approved.add_argument("--write", action="store_true", help="Required safety switch; otherwise print payloads")
 
     policy = sub.add_parser("policy", help="Show the active VULNARCHIVE publication policy")
 
@@ -240,66 +231,6 @@ def main(argv: list[str] | None = None) -> int:
                     progress=_progress,
                 ))
             print(json.dumps(_summary(aggregate), indent=2))
-        elif args.command == "submit":
-            rows = [row for row in store.rows() if row["source_url"] == args.source_url]
-            if not rows:
-                raise RuntimeError("source URL is not present in the local database")
-            row = rows[0]
-            extraction = row["extraction"]
-            match = next((item for item in row["matches"] if item["vulnerability_id"].upper() == args.vulnerability_id.upper()), None)
-            if not match:
-                raise RuntimeError("requested vulnerability ID is not an existing match; review/export first")
-            intent = {
-                "vulnerability": match["vulnerability_id"],
-                "type": extraction["proposed_type"],
-                "source": args.source_url,
-                "content": f"Full Disclosure: {row['title']}",
-            }
-            if not args.write:
-                print(json.dumps({"dry_run": True, "payload": intent}, indent=2))
-                return 0
-            # Re-fetching preserves a single canonical payload builder and detects source changes.
-            html = source_client.get_text(args.source_url)
-            from .extract import extract
-            from .models import Match
-            from .parsers import parse_message
-            message = parse_message(html, args.source_url)
-            extracted = extract(message)
-            status, response = lookup.submit_sighting(message, extracted, Match(**match))
-            store.record_submission(args.source_url, match["vulnerability_id"], extracted.proposed_type, response)
-            print(json.dumps({"status": status, "response": response}, indent=2))
-        elif args.command == "submit-approved":
-            from .models import Extraction, Match, Message
-            approved_rows = store.approved(args.limit)
-            outcomes = []
-            for row in approved_rows:
-                vulnerability_id = str(row["reviewed_vulnerability_id"])
-                sighting_type = str(row["reviewed_sighting_type"])
-                payload = {
-                    "vulnerability": vulnerability_id,
-                    "type": sighting_type,
-                    "source": row["source_url"],
-                    "content": f"Full Disclosure: {row['title']}",
-                }
-                if not args.write:
-                    outcomes.append({"dry_run": True, "payload": payload})
-                    continue
-                record = lookup.lookup(vulnerability_id)
-                if not record:
-                    outcomes.append({"source": row["source_url"], "error": "vulnerability ID not found"})
-                    continue
-                extraction_data = dict(row["extraction"])
-                extraction_data.pop("proposed_type", None)
-                message = Message(
-                    source_url=str(row["source_url"]), title=str(row["title"]), author=str(row["author"]),
-                    published=str(row["published"]), body=str(row["body"]), links=list(row["links"]),
-                )
-                extracted = Extraction(**extraction_data)
-                match = Match(vulnerability_id, "analyst-approved", 1.0, "")
-                status, response = lookup.submit_sighting(message, extracted, match, sighting_type)
-                store.record_submission(str(row["source_url"]), vulnerability_id, sighting_type, response)
-                outcomes.append({"source": row["source_url"], "status": status, "response": response})
-            print(json.dumps({"count": len(outcomes), "outcomes": outcomes}, indent=2))
         return 0
     finally:
         store.close()

@@ -146,6 +146,29 @@ class ParserTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_review_accepts_multiple_or_no_referenced_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "review.sqlite")
+            try:
+                first = parse_message(MESSAGE_HTML, "https://example.test/multiple")
+                extraction = extract(first)
+                store.save(first, extraction, [])
+                store.review(first.source_url, "approved", ["CVE-2026-1", "cve-2026-2", "CVE-2026-1"], "seen")
+                self.assertEqual(store.get(first.source_url)["reviewed_vulnerability_ids"],
+                                 ["CVE-2026-1", "CVE-2026-2"])
+                reviewed = store.automatic_candidates()[0]
+                self.assertEqual([match["vulnerability_id"] for match in reviewed["matches"]],
+                                 ["CVE-2026-1", "CVE-2026-2"])
+                second = parse_message(MESSAGE_HTML, "https://example.test/new-advisory")
+                store.save(second, extraction, [])
+                store.review(second.source_url, "approved", [], "seen")
+                self.assertEqual(store.get(second.source_url)["reviewed_vulnerability_ids"], [])
+                no_id = next(row for row in store.automatic_candidates()
+                             if row["source_url"] == second.source_url)
+                self.assertEqual(no_id["matches"], [])
+            finally:
+                store.close()
+
     def test_authenticated_connection_status(self):
         lookup = VulnerabilityLookup(FakeClient(), "https://vulnerability.example", "secret")
         status = lookup.connection_status()

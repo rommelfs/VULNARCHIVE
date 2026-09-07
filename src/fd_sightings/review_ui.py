@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 import secrets
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -92,11 +93,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
         action = data.get("action", ["pending"])[0]
         state = {"approve": "approved", "reject": "rejected", "reset": "pending"}.get(action, "pending")
         try:
-            selected_id = data.get("custom_vulnerability_id", [""])[0].strip() or data.get("vulnerability_id", [""])[0].strip()
+            selected_ids = data.get("vulnerability_id", [])
+            custom_ids = re.split(r"[\s,;]+", data.get("custom_vulnerability_ids", [""])[0])
             self.server.store.review(
                 source,
                 state,
-                selected_id,
+                selected_ids + custom_ids,
                 data.get("sighting_type", [""])[0],
                 data.get("note", [""])[0],
             )
@@ -211,10 +213,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         extraction = row["extraction"]
         matches = row["matches"]
-        chosen = str(row["reviewed_vulnerability_id"] or (matches[0]["vulnerability_id"] if matches else ""))
+        chosen = set(row["reviewed_vulnerability_ids"] or
+                     [match["vulnerability_id"] for match in matches])
         sighting_type = str(row["reviewed_sighting_type"] or extraction.get("proposed_type", "seen"))
         match_cards = "".join(
-            f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] == chosen else ""}>'
+            f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] in chosen else ""}>'
             f'{_e(match["vulnerability_id"])} — {_e(match["title"])} ({_e(match["confidence"])})</option>'
             for match in matches
         )
@@ -226,8 +229,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
 <p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
 <form method="post" action="/review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="source" value="{_e(source)}">
-<label>Matched vulnerability</label><select name="vulnerability_id" style="width:100%"><option value="">Select…</option>{match_cards}</select>
-<label>Or override with an ID</label><input name="custom_vulnerability_id" placeholder="CVE-YYYY-NNNN" style="width:100%">
+<label>Referenced vulnerabilities (zero, one, or multiple)</label><select name="vulnerability_id" multiple size="6" style="width:100%">{match_cards}</select>
+<p class="muted">Leave empty for a new advisory without a referenced ID. Use Ctrl/Cmd to select multiple entries.</p>
+<label>Additional IDs</label><textarea name="custom_vulnerability_ids" placeholder="One ID per line, or comma-separated"></textarea>
 <label>Sighting type</label><select name="sighting_type" style="width:100%">{self._options(SIGHTING_TYPES, sighting_type)}</select>
 <label>Review note</label><textarea name="note">{_e(row['review_note'])}</textarea>
 <div class="toolbar" style="margin-top:14px"><button name="action" value="approve">Approve</button><button class="danger" name="action" value="reject">Reject</button><button class="secondary" name="action" value="reset">Reset</button></div></form>
