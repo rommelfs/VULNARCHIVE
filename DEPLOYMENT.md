@@ -8,10 +8,10 @@ VULNARCHIVE runs two separate HTTP processes:
   It serves `/`, `/api/gcve/publication`, `/dumps/gna-1988.ndjson`,
   `/.well-known/security.txt`, and `/archive/`.
 - `vulnarchive-review.service` is the administrative review and publication UI on
-  `127.0.0.1:8765`. It must only be reached locally or through a separately secured
-  operator channel; the public Apache virtual host never proxies it.
-- `vulnarchive-sync.service` performs writes to the configured external publication
-  target (`VL_URL`) with the API key from the protected environment file.
+  the private RFC1918 address configured as `VA_REVIEW_BIND` (currently
+  `10.205.22.135:8765`). Restrict it to the operator network; the public Apache
+  virtual host never proxies it.
+- `vulnarchive-sync.service` imports new messages and commits eligible GCVE records transactionally to the same local SQLite store.
 
 There is no required local Vulnerability-Lookup installation and no dependency on port
 10001. Apache is the only public ingress. The SQLite database and both application
@@ -36,12 +36,7 @@ sudo systemctl enable --now vulnarchive-web
 sudo systemctl start vulnarchive-review
 ```
 
-Set `VL_URL` to the independently operated publication target. Put `VL_API_KEY` only in
-`/etc/vulnarchive/vulnarchive.env` (mode 0640, `root:vulnarchive`). Use a dedicated,
-least-privileged publisher credential. No credential is loaded by the public process for
-handling requests, and its HTTP handler implements GET only.
-
-Configure `VA_SECURITY_CONTACT` and refresh `VA_SECURITY_EXPIRES` before it expires.
+`VL_URL` is optional and is used only for read-only resolution of foreign identifiers. GCVE reservation and publication require no external account or API key. Set `VA_REVIEW_BIND=10.205.22.135` and allow TCP/8765 only from the trusted RFC1918 operator network. No credential is loaded by the public process, and its HTTP handler implements GET only. The static `deploy/security.txt` is the single discovery document served by Apache and mirrored by the application.
 
 ## Apache and public acceptance
 
@@ -61,12 +56,12 @@ curl --fail -X POST https://vuln.freearchive.org/api/gcve/publication && exit 1 
 ```
 
 Confirm that `/review`, `/connection`, `/publish`, and `/observation` return 404 through
-the public host. The review UI remains at `127.0.0.1:8765` for an SSH tunnel or another
-authenticated operator-only ingress.
+the public host. Reach the review UI directly at `http://10.205.22.135:8765/` only from
+the firewall-restricted operator network; do not add it to the public virtual host.
 
 ## Publication and operation
 
-Before enabling periodic publication, verify the independently managed target and run:
+Before enabling periodic publication, verify the local policy and run:
 
 ```sh
 sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
