@@ -113,7 +113,9 @@ their status and logs below `data/workers/`, and import and match observations
 without publishing them. The worker detail page refreshes its live output every
 two seconds. Candidate search is disabled by default for a faster explicit-ID
 first pass; enable it when semantic candidate retrieval is required, and select
-**Reprocess existing posts** when applying it to an already imported range.
+**Reprocess existing posts** when applying it to an already imported range. The
+month fields use the browser's native calendar picker, default to the previous
+month, and prevent selection of future periods.
 
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 

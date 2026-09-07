@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,6 +47,10 @@ class ImportWorkerManagerTests(unittest.TestCase):
                     manager.submit(start, end)
             with self.assertRaises(ValueError):
                 manager.submit("2024-01", "2024-02", limit=10001)
+            now = datetime.now(timezone.utc)
+            future = f"{now.year + 1:04d}-01"
+            with self.assertRaises(ValueError):
+                manager.submit("2024-01", future)
             manager.executor.shutdown(wait=True)
 
 

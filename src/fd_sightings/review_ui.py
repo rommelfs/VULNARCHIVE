@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .store import Store
@@ -229,11 +230,17 @@ class ReviewHandler(BaseHTTPRequestHandler):
                       f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected["return_code"])}</p>'
                       f'<p class="muted">{feedback}</p>'
                       f'<pre>{_e(log or "No output yet.")}</pre></div>')
+        now = datetime.now(timezone.utc)
+        current_month = f"{now.year:04d}-{now.month:02d}"
+        previous_year = now.year if now.month > 1 else now.year - 1
+        previous_month_number = now.month - 1 if now.month > 1 else 12
+        previous_month = f"{previous_year:04d}-{previous_month_number:02d}"
         content = f'''<div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
-<div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" required></label>
-<label>To month <input type="month" name="to_period" min="2002-01" required></label>
+<p class="muted">Use the calendar controls to select complete archive months. Future months cannot be queued.</p>
+<div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
+<label>To month <input type="month" name="to_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="Last archive month"></label>
 <label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
 <label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
 <label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>

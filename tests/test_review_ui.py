@@ -103,6 +103,9 @@ class ReviewUITest(unittest.TestCase):
             page = response.read().decode()
         self.assertIn("Historical archive imports", page)
         self.assertIn('action="/review/workers"', page)
+        self.assertEqual(page.count('type="month"'), 2)
+        self.assertEqual(page.count('min="2002-01" max="'), 2)
+        self.assertIn("Use the calendar controls", page)
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,

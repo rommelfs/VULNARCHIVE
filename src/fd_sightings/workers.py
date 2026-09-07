@@ -62,6 +62,9 @@ class ImportWorkerManager:
     ) -> dict[str, Any]:
         first = _month_number(start)
         last = _month_number(end)
+        now = datetime.now(timezone.utc)
+        if last > now.year * 12 + now.month:
+            raise ValueError("to period must not be in the future")
         if last < first:
             raise ValueError("to period must not be earlier than from period")
         if last - first + 1 > 120:
