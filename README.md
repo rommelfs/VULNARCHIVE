@@ -7,6 +7,8 @@ An automatic publication is an assertion by GNA 1988. It is not a validation, co
 The normative local behavior is documented in `VULNARCHIVE_POLICY.md`.
 Production service and reverse-proxy templates are documented in `DEPLOYMENT.md`.
 Project status, architectural decisions, and continuation instructions are documented in `HANDOVER.md`.
+The GCVE Best Current Practices supplied with this repository are indexed in
+[`documentation/README.md`](documentation/README.md).
 
 ## Capabilities
 
@@ -15,9 +17,11 @@ Project status, architectural decisions, and continuation instructions are docum
 - SQLite checkpoints and idempotent re-runs
 - Original source retention with SHA-256, format, and Message-ID when available
 - CVE, GCVE, GHSA, CWE, and CVSS extraction
+- Static affected-version and vulnerability-class extraction
 - Evidence-based `seen` versus `published-proof-of-concept` proposal
 - Exact Vulnerability-Lookup resolution for explicit identifiers
 - Conservative product/title candidate matching for ID-less posts
+- Auditable candidate evidence and contradiction-aware CWE/version comparison
 - JSON Lines review export
 - Local analyst review interface with filters, detail view, approval, rejection, match override, and notes
 - Explicit, single-observation Sighting submission
@@ -146,8 +150,14 @@ Policy thresholds are configured through environment variables:
 - `VA_PUBLISH_CONTEXT_RECORDS` and `VA_PUBLISH_SIGHTINGS` (both default `true`)
 - `VA_AUTO_CREATE_YEAR_RANGE` (default `true`)
 - `VA_MAX_DESCRIPTION_CHARS` (default `12000`)
+- `VA_MIN_INFERRED_MATCH_CONFIDENCE` (default `0.92`)
+- `VA_MIN_INFERRED_MATCH_MARGIN` (default `0.08`)
 
 The evidence score is deterministic and records which publication rule fired. It measures whether the post contains enough structured material to publish; it does not claim that the report is correct.
+
+The staged matching design, including optional LLM-assisted analysis and its
+required safeguards, is documented in
+[`documentation/AUTOMATED_MATCHING.md`](documentation/AUTOMATED_MATCHING.md).
 
 ## Local publication store and public service
 
