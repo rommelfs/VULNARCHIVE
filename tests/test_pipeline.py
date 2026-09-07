@@ -325,6 +325,26 @@ class ParserTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_publication_can_target_one_approved_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "source.sqlite")
+            try:
+                first = parse_message(MESSAGE_HTML, "https://example.test/first")
+                second = parse_message(MESSAGE_HTML, "https://example.test/second")
+                extraction = extract(first)
+                store.save(first, extraction, [])
+                store.save(second, extraction, [])
+                store.review(first.source_url, "approved", [], "published-proof-of-concept")
+                outcomes = execute_automatic_publication(
+                    store, PublicationPolicy(min_body_chars=20),
+                    dry_run=True, source_url=first.source_url,
+                )
+                self.assertEqual(len(outcomes), 1)
+                self.assertEqual(outcomes[0]["plan"]["source_url"], first.source_url)
+                self.assertEqual(outcomes[0]["plan"]["action"], "new-advisory")
+            finally:
+                store.close()
+
     def test_local_reservation_is_reused_and_record_ledger_commit_together(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / "transaction.sqlite")

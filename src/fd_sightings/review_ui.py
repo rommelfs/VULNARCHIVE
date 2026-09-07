@@ -119,10 +119,31 @@ class ReviewHandler(BaseHTTPRequestHandler):
         data = self._form_data()
         if data is None:
             return
-        if data.get("mode", [""])[0] != "automatic":
+        mode = data.get("mode", [""])[0]
+        if mode == "source":
+            self._publish_source(data)
+            return
+        if mode != "automatic":
             self._send(_layout("Publish error", '<div class="panel"><h1>Unsupported publication mode</h1><p>VULNARCHIVE publishes only to its local BCP-03/BCP-05 store.</p></div>'), 400)
             return
         self._publish_automatic(data)
+
+    def _publish_source(self, data: dict[str, list[str]]) -> None:
+        from .policy import PublicationPolicy
+        from .publication import execute_automatic_publication
+
+        source = data.get("source", [""])[0]
+        row = self.server.store.get(source)
+        if not row or row["review_state"] != "approved":
+            self._send(_layout("Publish error", '<div class="panel"><h1>Approve this observation before publication.</h1></div>'), 400)
+            return
+        outcomes = execute_automatic_publication(
+            self.server.store, PublicationPolicy.from_env(),
+            retry_failed=True, source_url=source,
+        )
+        import json
+        rendered = _e(json.dumps(outcomes, ensure_ascii=False, indent=2))
+        self._send(_layout("Local publication completed", f'<div class="panel"><h1>Local publication completed</h1><p>The result is available through BCP-03 when the plan published a GCVE record.</p><p><a href="{_e("/observation?" + urllib.parse.urlencode({"source": source}))}">Back</a></p><pre>{rendered}</pre></div>'))
 
     def _publication_dashboard(self) -> None:
         from dataclasses import asdict
@@ -255,8 +276,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _publish_form(self, row: dict[str, object], source: str) -> str:
         if row["review_state"] != "approved":
-            return '<p class="muted">Approve this observation before publication.</p>'
-        return '<hr><p class="muted">Approved. Local BCP-05 records are created from the <a href="/publish">publication dashboard</a>.</p>'
+            return '<p class="muted">Approval records the review decision; publish it locally in a second step.</p>'
+        return f'''<hr><h3>Local publication</h3><p>Approval alone does not publish. This creates the local BCP-05 record now.</p>
+<form method="post" action="/publish"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="mode" value="source"><input type="hidden" name="source" value="{_e(source)}"><button>Publish this approved entry locally</button></form>'''
 
 
 def serve(store: Store, bind: str = "127.0.0.1", port: int = 8765) -> None:
