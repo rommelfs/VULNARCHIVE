@@ -8,7 +8,8 @@ The production boundary consists of:
 
 - `vulnarchive-sync.service`: imports messages and writes eligible records to SQLite.
 - `vulnarchive-web.service`: read-only public server on `127.0.0.1:8766`.
-- `vulnarchive-review.service`: administrative UI on `127.0.0.1:8765`; never publicly proxied.
+- `vulnarchive-review.service`: administrative UI on the configured private address
+  `10.205.22.135:8765`; firewall-restricted and never publicly proxied.
 - Apache: public TLS ingress with an explicit route allowlist and a static `security.txt`.
 
 The public server exposes `/`, `/api/gcve/publication`, `/dumps/gna-1988.ndjson`, and `/archive/`. BCP-03 returns a bare JSON list. The dump contains exactly the canonical local publication set as compact NDJSON. `deploy/security.txt` advertises the public GCVE base and is mirrored by the direct application route.
@@ -30,4 +31,4 @@ fd-sightings public --bind 127.0.0.1 --port 8766
 
 Before rollout, run the unit suite, compile check, and hermetic BCP-03 acceptance suite documented in `README.md`. Then run `apachectl configtest`, confirm public GET routes, and confirm administrative and write routes return 404/405.
 
-Do not expose SQLite, port 8765, or port 8766 directly. Back up the SQLite database before upgrades and historical imports. Publication reservations are idempotent and must be reused after failures.
+Do not expose SQLite or port 8766 directly. Expose port 8765 only on the RFC1918 interface and only to the trusted operator subnet. Back up the SQLite database before upgrades and historical imports. Publication reservations are idempotent and must be reused after failures.

@@ -90,7 +90,11 @@ Start the local review interface:
 fd-sightings review
 ```
 
-Then open `http://127.0.0.1:8765`. The interface binds only to localhost by default. It supports queue filters, the original Full Disclosure body, extracted evidence, candidate selection, manual vulnerability-ID overrides, review notes, approval, rejection, and resetting a decision.
+In production, set `VA_REVIEW_BIND=10.205.22.135` and open
+`http://10.205.22.135:8765/` from the trusted operator network. The CLI still
+defaults to localhost when it is started outside the supplied systemd unit. The
+interface supports queue filters, source evidence, match overrides, approval,
+rejection, and review notes.
 
 The review interface uses the optional read-only lookup service to validate foreign identifiers and find candidates. Automatic GCVE publication is always local.
 
