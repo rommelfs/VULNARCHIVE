@@ -228,7 +228,7 @@ class ParserTests(unittest.TestCase):
                 "poc_evidence": ["explicit PoC wording"], "cwe_ids": ["CWE-94"],
                 "cvss_vectors": [], "proposed_type": "published-proof-of-concept",
             },
-            "matches": [{"vulnerability_id": "CVE-2026-77939"}],
+            "matches": [{"vulnerability_id": "CVE-2026-77939", "method": "explicit-id", "confidence": 1.0}],
         }
         plan = plan_observation(row, PublicationPolicy())
         self.assertEqual(plan.action, "context-and-sightings")
@@ -292,6 +292,48 @@ class ParserTests(unittest.TestCase):
         record = build_gcve_record(row, "GCVE-1988-2024-0001", plan, PublicationPolicy())
         relationship = record["containers"]["cna"]["x_gcve"][0]["relationships"][0]
         self.assertEqual(relationship["type"], "possibly_related")
+
+    def test_only_clear_inferred_winner_is_an_automatic_reference(self):
+        row = {
+            "source_url": "https://example.test/report", "title": "Widget issue",
+            "published": "2024-01-01T00:00:00Z",
+            "body": "buffer overflow payload " + "B" * 600, "links": [],
+            "extraction": {
+                "relevant": True, "product_hint": "Widget", "poc_score": 3,
+                "poc_evidence": [], "cwe_ids": [], "cvss_vectors": [],
+                "proposed_type": "published-proof-of-concept",
+            },
+            "matches": [
+                {"vulnerability_id": "CVE-2024-1234", "method": "product-title-overlap", "confidence": 0.94},
+                {"vulnerability_id": "CVE-2024-5678", "method": "product-title-overlap", "confidence": 0.80},
+            ],
+        }
+        plan = plan_observation(row, PublicationPolicy())
+        self.assertEqual(plan.targets, ("CVE-2024-1234",))
+        self.assertEqual(plan.action, "context-and-sightings")
+
+        row["matches"][1]["confidence"] = 0.90
+        ambiguous = plan_observation(row, PublicationPolicy())
+        self.assertEqual(ambiguous.targets, ())
+        self.assertEqual(ambiguous.action, "review-required")
+
+    def test_low_confidence_candidate_remains_unmatched_for_publication(self):
+        row = {
+            "source_url": "https://example.test/report", "title": "Widget issue",
+            "published": "2024-01-01T00:00:00Z",
+            "body": "buffer overflow payload " + "B" * 600, "links": [],
+            "extraction": {
+                "relevant": True, "product_hint": "Widget", "poc_score": 3,
+                "poc_evidence": [], "cwe_ids": [], "cvss_vectors": [],
+                "proposed_type": "published-proof-of-concept",
+            },
+            "matches": [
+                {"vulnerability_id": "CVE-2024-1234", "method": "product-title-overlap", "confidence": 0.91},
+            ],
+        }
+        plan = plan_observation(row, PublicationPolicy())
+        self.assertEqual(plan.targets, ())
+        self.assertEqual(plan.action, "review-required")
 
     def test_dry_run_does_not_write_publication_ledger(self):
         with tempfile.TemporaryDirectory() as directory:

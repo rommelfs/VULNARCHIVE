@@ -39,6 +39,8 @@ class PublicationPolicy:
     require_product_for_new: bool = True
     auto_create_year_range: bool = True
     max_description_chars: int = 12000
+    min_inferred_match_confidence: float = 0.92
+    min_inferred_match_margin: float = 0.08
 
     @classmethod
     def from_env(cls) -> "PublicationPolicy":
@@ -55,6 +57,8 @@ class PublicationPolicy:
             require_product_for_new=_boolean("VA_REQUIRE_PRODUCT_FOR_NEW", True),
             auto_create_year_range=_boolean("VA_AUTO_CREATE_YEAR_RANGE", True),
             max_description_chars=_integer("VA_MAX_DESCRIPTION_CHARS", 12000),
+            min_inferred_match_confidence=float(os.getenv("VA_MIN_INFERRED_MATCH_CONFIDENCE", "0.92")),
+            min_inferred_match_margin=float(os.getenv("VA_MIN_INFERRED_MATCH_MARGIN", "0.08")),
         )
 
 
@@ -102,13 +106,51 @@ def evidence_score(row: dict[str, object]) -> int:
     return score
 
 
+def reference_targets(row: dict[str, object], policy: PublicationPolicy) -> tuple[str, ...]:
+    """Return matches that are safe enough for unattended publication.
+
+    Explicit identifiers are authoritative evidence that the source refers to
+    that identifier. Inferred matches are accepted only when there is one clear
+    winner above both the absolute confidence threshold and the configured
+    margin over the runner-up. Candidate matches remain stored for review even
+    when this publication gate rejects them.
+    """
+    matches = [match for match in list(row.get("matches") or []) if isinstance(match, dict)]
+    explicit = [
+        str(match.get("vulnerability_id", "")).upper()
+        for match in matches
+        if match.get("method") in {"explicit-id", "analyst-approved"} and match.get("vulnerability_id")
+    ]
+    if explicit:
+        return tuple(dict.fromkeys(explicit))
+
+    inferred = sorted(
+        (
+            match for match in matches
+            if match.get("method") == "product-title-overlap" and match.get("vulnerability_id")
+        ),
+        key=lambda match: float(match.get("confidence") or 0),
+        reverse=True,
+    )
+    if not inferred:
+        return ()
+    winner = inferred[0]
+    winner_confidence = float(winner.get("confidence") or 0)
+    runner_up_confidence = float(inferred[1].get("confidence") or 0) if len(inferred) > 1 else 0.0
+    if winner_confidence < policy.min_inferred_match_confidence:
+        return ()
+    if len(inferred) > 1 and winner_confidence - runner_up_confidence < policy.min_inferred_match_margin:
+        return ()
+    return (str(winner["vulnerability_id"]).upper(),)
+
+
 def plan_observation(row: dict[str, object], policy: PublicationPolicy) -> PublicationPlan:
     extraction = dict(row.get("extraction") or {})
-    targets = tuple(dict.fromkeys(
-        str(match.get("vulnerability_id", "")).upper()
+    targets = reference_targets(row, policy)
+    has_inferred_candidates = any(
+        isinstance(match, dict) and match.get("method") not in {"explicit-id", "analyst-approved"}
         for match in list(row.get("matches") or [])
-        if isinstance(match, dict) and match.get("vulnerability_id")
-    ))
+    )
     score = evidence_score(row)
     enough_body = len(str(row.get("body") or "")) >= policy.min_body_chars
     sighting_type = str(extraction.get("proposed_type") or "seen")
@@ -123,6 +165,12 @@ def plan_observation(row: dict[str, object], policy: PublicationPolicy) -> Publi
         return PublicationPlan(
             str(row["source_url"]), score, "sightings", targets, sighting_type,
             reason="known identifier; context threshold not reached",
+        )
+
+    if has_inferred_candidates:
+        return PublicationPlan(
+            str(row["source_url"]), score, "review-required", (), sighting_type,
+            reason="candidate match did not pass the unattended reference gate",
         )
 
     product_present = bool(extraction.get("product_hint"))

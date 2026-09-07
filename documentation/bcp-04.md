@@ -1,0 +1,103 @@
+---
+title: GCVE-BCP-04 - Recommendations and Best Practices for ID Allocation  
+---
+
+# Recommendations and Best Practices for ID Allocation
+
+![](https://gcve.eu/logos/gcve.png)
+
+- **Version**: 1.4
+- **Status**: Published 
+- **Date**: 2026-03-10
+- **Authors**: GCVE Working Group
+- **BCP ID**: BCP-04
+
+This guide is distributed and available under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/legalcode).
+
+Copyright (C) 2025-2026 GCVE Initiative.
+
+## Introduction
+
+This document describes the best practices and recommendations for ID allocation and GCVE identifier format. 
+
+## GCVE Identifier Format
+
+The GCVE identifier typically follows a traditional four-part format:
+
+`GCVE-<GNA-ID>-<YEAR>-<UNIQUE-ID>`
+
+This format is recommended because it is consistent with models used in other vulnerability identification systems.  
+
+However, GNAs retain the flexibility to use alternative formats, especially if they already maintain their own identifier schemes.  
+
+### Format Breakdown
+
+| Field       | Description                                                         |
+|-------------|---------------------------------------------------------------------|
+| `GCVE`      | Prefix indicating a Global CVE ID |
+| `GNA ID`    | Unique identifier for the GCVE Numbering Authority                  |
+| `YEAR`      | The year of disclosure or allocation                                |
+| `UNIQUE ID` | A GNA-assigned identifier that must be unique for vulnerability allocated at the GNA |                 
+
+If a GNA chooses to use an alternative format, it must still follow this general prefix structure:
+
+`GCVE-<GNA-ID>-<GNA-VALUE>`
+
+The `GNA-VALUE` should be composed of valid 7-bit characters, excluding unprintable control codes and spaces.
+
+The following regular expression can be used to validate a GCVE Identifier: `^GCVE-[0-9]+-[\x22-\x7E]+$`.
+
+When defining a generic GNA value, GNAs should keep in mind the following considerations:
+
+- The practicality and readability of the identifier (even if technically valid).
+- Facilitating sharing and improving the visibility of the identifier.
+
+The GCVE standard allows a certain level of flexibility in how information is conveyed, but it is strongly recommended to maintain a reasonable degree of readability.
+
+#### Examples of valid identifiers
+
+- `GCVE-0-2024-13987`
+- `GCVE-1337-2025-00000000000000000000000000000000000000000000000001011111011111010111111001000000000000000000000000000000000000000000000000000000001`
+- `GCVE-65535-2021-XX-[222]_XX{1}`
+- `GCVE-65535-2021-XX-[222]_XX{1}/1/1/1`
+- `GCVE-65535-2021-XX-[222]_XX{1}\1/1\1`
+- `GCVE-65535-GHSA-jc7w-c686-c4v9`
+- `GCVE-65535-jc7w-c686-c4v9`
+- `GCVE-65535-ababcbbe.onion-1`
+- `GCVE-65535-Ivanti/Avalanche-1`
+
+The GNA ID `65535` is reserved as a test GNA ID, as defined in the [GCVE directory](https://gcve.eu/dist/gcve.json).
+
+### Identifier Length
+
+The maximum length for a GCVE identifier is **255 characters**. This ensures compatibility and reliable handling across different software systems.
+
+The reference implementation, [Vulnerability-Lookup](https://vulnerability-lookup.org), supports longer identifiers, but keeping identifiers within 255 characters facilitates integration across diverse toolsets. Nevertheless, it is recommended to keep identifiers within **255 characters (including the prefix)**.
+  -  If your regular expression engine supports positive lookahead assertions (most do), `^(?=.{8,255}$)GCVE-[0-9]+-[\x22-\x7E]+$` also accounts for a maximum length of 255 characters. For strict POSIX compliance (no lookahead assertions), `^GCVE-[0-9]+-[\x22-\x7E]{1,247}$` will be mostly accurate with reasonable performance and readability.
+
+## Allocation of GCVE Identifiers
+
+A GCVE Identifier must uniquely identify a vulnerability within the scope of a GNA.  
+
+GCVE Identifiers are **not limited** to newly discovered vulnerabilities. They may also be used to:  
+
+- extend the description of an existing vulnerability (e.g., adding metadata),  
+- reference a patch or remediation,  
+- establish a parent/child relationship with another vulnerability (e.g., a fork or variant).  
+
+The GCVE model is designed to support **multiple identifiers for the same vulnerability**, providing complementary information or alternative perspectives.  
+
+For example, this may occur when:  
+
+- vendors disagree on a vulnerability classification,  
+- independent discoveries are made in parallel,  
+- additional context is provided by different GNAs.  
+
+There is **no single authoritative identifier** for a given vulnerability. Instead, GCVE enables multiple viewpoints, fostering a more decentralized and transparent ecosystem.  
+
+We recommend that GNAs include cross-references whenever possible. This applies both to:  
+
+- other GCVE identifiers (from the same or different GNAs),  
+- identifiers from other vulnerability systems.  
+
+This cross-referencing supports stronger interoperability and helps build a richer, interconnected knowledge base covering scenarios such as parallel or independent vulnerability discoveries.
