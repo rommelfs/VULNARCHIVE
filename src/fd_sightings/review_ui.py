@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import html
+import base64
+import ipaddress
+import os
+import re
 import secrets
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .store import Store
-from .vulnerability_lookup import VulnerabilityLookup
-
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
 
@@ -37,11 +39,23 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px
 
 
 class ReviewServer(HTTPServer):
-    def __init__(self, address: tuple[str, int], store: Store, lookup: VulnerabilityLookup):
+    def __init__(self, address: tuple[str, int], store: Store):
         super().__init__(address, ReviewHandler)
         self.store = store
-        self.lookup = lookup
         self.csrf_token = secrets.token_urlsafe(24)
+        self.auth_username = os.environ.get("VA_REVIEW_USERNAME", "")
+        self.auth_password = os.environ.get("VA_REVIEW_PASSWORD", "")
+        prefix = os.environ.get("VA_REVIEW_PREFIX", "/review").strip()
+        self.url_prefix = "/" + prefix.strip("/") if prefix.strip("/") else ""
+        self.allowed_networks = _networks(os.environ.get("VA_REVIEW_ALLOWED_NETWORKS", "127.0.0.0/8"))
+        self.trusted_proxies = _networks(os.environ.get("VA_REVIEW_TRUSTED_PROXIES", "127.0.0.0/8"))
+
+
+def _networks(value: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    try:
+        return tuple(ipaddress.ip_network(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid review network configuration: {exc}") from exc
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -51,6 +65,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
         return
 
     def _send(self, body: bytes, status: int = 200, content_type: str = "text/html; charset=utf-8") -> None:
+        if content_type.startswith("text/html") and self.server.url_prefix:
+            page = body.decode("utf-8")
+            page = page.replace('href="/', f'href="{self.server.url_prefix}/')
+            page = page.replace('action="/', f'action="{self.server.url_prefix}/')
+            body = page.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -60,53 +79,63 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _redirect(self, location: str) -> None:
+        if location.startswith("/") and self.server.url_prefix:
+            location = self.server.url_prefix + location
         self.send_response(303)
         self.send_header("Location", location)
         self.end_headers()
 
+    def _authorize(self) -> bool:
+        peer = ipaddress.ip_address(self.client_address[0])
+        client = peer
+        if any(peer in network for network in self.server.trusted_proxies):
+            forwarded = self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+            if forwarded:
+                try:
+                    client = ipaddress.ip_address(forwarded)
+                except ValueError:
+                    self._send(b"Invalid forwarded client address", 400, "text/plain; charset=utf-8")
+                    return False
+        if not any(client in network for network in self.server.allowed_networks):
+            self._send(b"Forbidden", 403, "text/plain; charset=utf-8")
+            return False
+        if not self.server.auth_username or not self.server.auth_password:
+            self._send(b"Review authentication is not configured", 503, "text/plain; charset=utf-8")
+            return False
+        expected = base64.b64encode(
+            f"{self.server.auth_username}:{self.server.auth_password}".encode()
+        ).decode()
+        supplied = self.headers.get("Authorization", "")
+        if not secrets.compare_digest(supplied, f"Basic {expected}"):
+            body = b"Authentication required"
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="VULNARCHIVE Review", charset="UTF-8"')
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+        return True
+
     def do_GET(self) -> None:
+        if not self._authorize():
+            return
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == "/dumps/gna-1988.ndjson":
-            self._gna_dump()
-        elif parsed.path == "/":
+        if parsed.path == "/":
             self._index(params)
         elif parsed.path == "/observation":
             self._detail(params.get("source", [""])[0])
-        elif parsed.path == "/connection":
-            self._connection(refresh=True)
         elif parsed.path == "/publish":
             self._publication_dashboard()
-        elif parsed.path == "/api/gcve/publication":
-            self._bcp03_publications(params)
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
         else:
             self._send(_layout("Not found", '<div class="panel"><h1>Not found</h1></div>'), 404)
 
-    def _gna_dump(self) -> None:
-        from .dump import ndjson_lines
-
-        context = ndjson_lines(self.server.lookup)
-        try:
-            lines = context.__enter__()
-        except Exception as exc:
-            self._send(f"Unable to generate dump: {exc}".encode("utf-8"), 502, "text/plain; charset=utf-8")
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        try:
-            for line in lines:
-                self.wfile.write(line)
-        finally:
-            context.__exit__(None, None, None)
-
     def do_POST(self) -> None:
-        if self.path == "/connect":
-            self._connect()
+        if not self._authorize():
             return
         if self.path == "/publish":
             self._publish()
@@ -123,13 +152,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
         action = data.get("action", ["pending"])[0]
         state = {"approve": "approved", "reject": "rejected", "reset": "pending"}.get(action, "pending")
         try:
-            selected_id = data.get("custom_vulnerability_id", [""])[0].strip() or data.get("vulnerability_id", [""])[0].strip()
-            if state == "approved" and not self.server.lookup.lookup(selected_id):
-                raise ValueError(f"{selected_id} does not resolve on the configured Vulnerability-Lookup instance")
+            selected_ids = data.get("vulnerability_id", [])
+            custom_ids = re.split(r"[\s,;]+", data.get("custom_vulnerability_ids", [""])[0])
             self.server.store.review(
                 source,
                 state,
-                selected_id,
+                selected_ids + custom_ids,
                 data.get("sighting_type", [""])[0],
                 data.get("note", [""])[0],
             )
@@ -137,21 +165,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(_layout("Review error", f'<div class="panel"><h1>Review error</h1><p>{_e(exc)}</p></div>'), 400)
             return
         self._redirect("/observation?" + urllib.parse.urlencode({"source": source}))
-
-    def _connect(self) -> None:
-        data = self._form_data()
-        if data is None:
-            return
-        action = data.get("action", ["connect"])[0]
-        self.server.lookup.api_key = "" if action == "disconnect" else data.get("api_key", [""])[0].strip()
-        self.server.lookup._connection_cache = None
-        connection = self.server.lookup.connection_status(refresh=True)
-        if action == "connect" and not connection.get("authenticated"):
-            self.server.lookup.api_key = ""
-            self.server.lookup._connection_cache = None
-            self._send(_layout("Connection failed", self._connection_panel(connection)), 401)
-            return
-        self._redirect("/")
 
     def _form_data(self) -> dict[str, list[str]] | None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -165,37 +178,31 @@ class ReviewHandler(BaseHTTPRequestHandler):
         data = self._form_data()
         if data is None:
             return
-        if data.get("mode", [""])[0] == "automatic":
-            self._publish_automatic(data)
+        mode = data.get("mode", [""])[0]
+        if mode == "source":
+            self._publish_source(data)
             return
+        if mode != "automatic":
+            self._send(_layout("Publish error", '<div class="panel"><h1>Unsupported publication mode</h1><p>VULNARCHIVE publishes only to its local BCP-03/BCP-05 store.</p></div>'), 400)
+            return
+        self._publish_automatic(data)
+
+    def _publish_source(self, data: dict[str, list[str]]) -> None:
+        from .policy import PublicationPolicy
+        from .publication import execute_automatic_publication
+
         source = data.get("source", [""])[0]
         row = self.server.store.get(source)
         if not row or row["review_state"] != "approved":
-            self._send(_layout("Publish error", '<div class="panel"><h1>Only approved observations can be published.</h1></div>'), 400)
+            self._send(_layout("Publish error", '<div class="panel"><h1>Approve this observation before publication.</h1></div>'), 400)
             return
-        if not self.server.lookup.connection_status(refresh=True).get("authenticated"):
-            self._send(_layout("Connection required", '<div class="panel"><h1>Authenticated connection required</h1><p>Set <code>VL_API_KEY</code> and restart the review server.</p><p><a href="/">Back</a></p></div>'), 401)
-            return
-        from .models import Extraction, Match, Message
-        extraction_data = dict(row["extraction"])
-        extraction_data.pop("proposed_type", None)
-        message = Message(
-            source_url=str(row["source_url"]), title=str(row["title"]), author=str(row["author"]),
-            published=str(row["published"]), body=str(row["body"]), links=list(row["links"]),
+        outcomes = execute_automatic_publication(
+            self.server.store, PublicationPolicy.from_env(),
+            retry_failed=True, source_url=source,
         )
-        extraction = Extraction(**extraction_data)
-        vulnerability_id = str(row["reviewed_vulnerability_id"])
-        sighting_type = str(row["reviewed_sighting_type"])
-        try:
-            status, response = self.server.lookup.submit_sighting(
-                message, extraction, Match(vulnerability_id, "analyst-approved", 1.0), sighting_type
-            )
-            self.server.store.record_submission(source, vulnerability_id, sighting_type, response)
-        except Exception as exc:
-            self._send(_layout("Publish failed", f'<div class="panel"><h1>Publish failed</h1><p>{_e(exc)}</p><p><a href="{_e("/observation?" + urllib.parse.urlencode({"source": source}))}">Back</a></p></div>'), 502)
-            return
-        message_text = "Already present (duplicate)" if status == 409 else "Sighting published"
-        self._send(_layout(message_text, f'<div class="panel"><h1>{_e(message_text)}</h1><p>{_e(vulnerability_id)} · {_e(sighting_type)}</p><p><a href="/">Back to queue</a></p></div>'))
+        import json
+        rendered = _e(json.dumps(outcomes, ensure_ascii=False, indent=2))
+        self._send(_layout("Local publication completed", f'<div class="panel"><h1>Local publication completed</h1><p>The result is available through BCP-03 when the plan published a GCVE record.</p><p><a href="{_e("/observation?" + urllib.parse.urlencode({"source": source}))}">Back</a></p><pre>{rendered}</pre></div>'))
 
     def _publication_dashboard(self) -> None:
         from dataclasses import asdict
@@ -216,11 +223,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             f"<td>{_e(', '.join(plan.targets) or 'new GCVE')}</td></tr>"
             for plan in plans[:100]
         )
-        connection = self._connection_panel(self.server.lookup.connection_snapshot())
         policy_rows = "".join(
             f"<tr><th>{_e(key)}</th><td>{_e(value)}</td></tr>" for key, value in asdict(policy).items()
         )
-        content = connection + f"""<div class="panel"><h1>Automatic publication</h1>
+        content = f"""<div class="panel"><h1>Local automatic publication</h1>
 <p>Publications are assertions by GNA 1988, not validation or a trust decision.</p><div>{summary}</div>
 <form method="post" action="/publish" class="toolbar" style="margin-top:16px">
 <input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="mode" value="automatic">
@@ -250,55 +256,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
         rendered = _e(json.dumps(outcomes, ensure_ascii=False, indent=2))
         self._send(_layout("Publication completed", f'<div class="panel"><h1>Publication run completed</h1><p>Processed {_e(len(outcomes))} archived observations.</p><p><a href="/publish">Back to publication dashboard</a></p><pre>{rendered}</pre></div>'))
 
-    def _bcp03_publications(self, params: dict[str, list[str]]) -> None:
-        """Expose committed local records through the BCP-03 pull shape."""
-        import json
-        try:
-            page = int(params.get("page", ["1"])[0])
-            per_page = int(params.get("per_page", ["100"])[0])
-            if page < 1 or not 1 <= per_page <= 1000:
-                raise ValueError
-        except ValueError:
-            self._send(b'{"error":"invalid pagination"}', 400, "application/json")
-            return
-        records = self.server.store.bcp03_publications()
-        start = (page - 1) * per_page
-        body = json.dumps({"data": records[start:start + per_page], "metadata": {
-            "page": page, "per_page": per_page, "count": len(records)
-        }}, ensure_ascii=False).encode("utf-8")
-        self._send(body, content_type="application/json")
-
-    def _connection(self, refresh: bool = False) -> None:
-        connection = self.server.lookup.connection_status(refresh=refresh)
-        self._send(_layout("Connection", self._connection_form(connection)))
-
-    @staticmethod
-    def _connection_panel(connection: dict[str, object]) -> str:
-        if not connection.get("checked"):
-            label = "Connection not tested"
-            css = "pending"
-        elif connection.get("authenticated"):
-            label = f'Connected as <strong>{_e(connection.get("login"))}</strong>'
-            css = "approved"
-        elif connection.get("reachable"):
-            label = "Connected read-only — set VL_API_KEY to publish"
-            css = "pending"
-        else:
-            label = f'Connection failed: {_e(connection.get("error"))}'
-            css = "rejected"
-        return f'<div class="panel"><div class="toolbar"><span class="{css}">{label}</span><span class="muted">{_e(connection.get("base_url"))}</span><a href="/connection" class="button secondary">Connection settings</a></div></div>'
-
-    def _connection_form(self, connection: dict[str, object]) -> str:
-        panel = self._connection_panel(connection)
-        if connection.get("authenticated"):
-            form = f"""<div class="panel"><h1>Connection settings</h1><p>The API key is held only in this server process.</p>
-<form method="post" action="/connect"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><button class="danger" name="action" value="disconnect">Disconnect</button></form></div>"""
-        else:
-            form = f"""<div class="panel"><h1>Connect to Vulnerability-Lookup</h1><p>Enter a personal API key. It remains in memory only and is not stored in SQLite or the browser.</p>
-<form method="post" action="/connect"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><label>API key</label>
-<input type="password" name="api_key" required autocomplete="off" style="width:100%"><div style="margin-top:14px"><button name="action" value="connect">Connect</button></div></form></div>"""
-        return '<p><a href="/">← Queue</a></p>' + panel + form
-
     def _index(self, params: dict[str, list[str]]) -> None:
         review = params.get("review", [""])[0]
         match_status = params.get("match", [""])[0]
@@ -307,7 +264,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if query:
             rows = [row for row in rows if query in str(row["title"]).casefold() or query in str(row["source_url"]).casefold()]
         counts = {state: len(self.server.store.rows(review_state=state)) for state in ("pending", "approved", "rejected")}
-        connection_panel = self._connection_panel(self.server.lookup.connection_snapshot())
         table_rows = []
         for row in rows:
             extraction = row["extraction"]
@@ -318,7 +274,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             href = "/observation?" + urllib.parse.urlencode({"source": row["source_url"]})
             table_rows.append(f"""<tr><td><a href="{_e(href)}"><strong>{_e(row['title'])}</strong></a><br><span class="muted">{_e(row['author'])} · {_e(row['published'])}</span><br>{tags}</td>
 <td>{_e(proposed)}</td><td>{confidence:.3f}</td><td class="{_e(row['review_state'])}">{_e(row['review_state'])}</td></tr>""")
-        content = connection_panel + f"""<div class="panel"><h1>Review queue</h1><div class="toolbar">
+        content = f"""<div class="panel"><h1>Review queue</h1><div class="toolbar">
 <span>Pending <strong>{counts['pending']}</strong></span><span>Approved <strong>{counts['approved']}</strong></span><span>Rejected <strong>{counts['rejected']}</strong></span></div>
 <form class="toolbar" method="get" style="margin-top:16px"><input name="q" value="{_e(params.get('q',[''])[0])}" placeholder="Search title">
 <select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), review)}</select>
@@ -337,10 +293,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         extraction = row["extraction"]
         matches = row["matches"]
-        chosen = str(row["reviewed_vulnerability_id"] or (matches[0]["vulnerability_id"] if matches else ""))
+        chosen = set(row["reviewed_vulnerability_ids"] or
+                     [match["vulnerability_id"] for match in matches])
         sighting_type = str(row["reviewed_sighting_type"] or extraction.get("proposed_type", "seen"))
         match_cards = "".join(
-            f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] == chosen else ""}>'
+            f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] in chosen else ""}>'
             f'{_e(match["vulnerability_id"])} — {_e(match["title"])} ({_e(match["confidence"])})</option>'
             for match in matches
         )
@@ -352,8 +309,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
 <p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
 <form method="post" action="/review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="source" value="{_e(source)}">
-<label>Matched vulnerability</label><select name="vulnerability_id" style="width:100%"><option value="">Select…</option>{match_cards}</select>
-<label>Or override with an ID</label><input name="custom_vulnerability_id" placeholder="CVE-YYYY-NNNN" style="width:100%">
+<label>Referenced vulnerabilities (zero, one, or multiple)</label><select name="vulnerability_id" multiple size="6" style="width:100%">{match_cards}</select>
+<p class="muted">Leave empty for a new advisory without a referenced ID. Use Ctrl/Cmd to select multiple entries.</p>
+<label>Additional IDs</label><textarea name="custom_vulnerability_ids" placeholder="One ID per line, or comma-separated"></textarea>
 <label>Sighting type</label><select name="sighting_type" style="width:100%">{self._options(SIGHTING_TYPES, sighting_type)}</select>
 <label>Review note</label><textarea name="note">{_e(row['review_note'])}</textarea>
 <div class="toolbar" style="margin-top:14px"><button name="action" value="approve">Approve</button><button class="danger" name="action" value="reject">Reject</button><button class="secondary" name="action" value="reset">Reset</button></div></form>
@@ -377,14 +335,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _publish_form(self, row: dict[str, object], source: str) -> str:
         if row["review_state"] != "approved":
-            return '<p class="muted">Approve this observation before publishing.</p>'
-        return f"""<hr><h3>Publish to configured instance</h3><p>This creates the reviewed Sighting immediately on {_e(self.server.lookup.base_url)}.</p>
-<form method="post" action="/publish"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="source" value="{_e(source)}">
-<button>Publish approved Sighting</button></form>"""
+            return '<p class="muted">Approval records the review decision; publish it locally in a second step.</p>'
+        return f'''<hr><h3>Local publication</h3><p>Approval alone does not publish. This creates the local BCP-05 record now.</p>
+<form method="post" action="/publish"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="mode" value="source"><input type="hidden" name="source" value="{_e(source)}"><button>Publish this approved entry locally</button></form>'''
 
 
-def serve(store: Store, lookup: VulnerabilityLookup, bind: str = "127.0.0.1", port: int = 8765) -> None:
-    server = ReviewServer((bind, port), store, lookup)
+def serve(store: Store, bind: str = "127.0.0.1", port: int = 8765) -> None:
+    server = ReviewServer((bind, port), store)
     print(f"Review UI: http://{bind}:{port}")
     try:
         server.serve_forever()

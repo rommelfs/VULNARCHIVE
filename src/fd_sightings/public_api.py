@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.parse
 from datetime import datetime, timezone
@@ -66,6 +67,12 @@ def _products(record: dict[str, Any]) -> set[str]:
     }
 
 
+def _source(record: dict[str, Any]) -> str:
+    cna = (record.get("containers") or {}).get("cna") or {}
+    provider = cna.get("providerMetadata") or {}
+    return str(provider.get("shortName", "")).casefold()
+
+
 def _cwes(record: dict[str, Any]) -> set[str]:
     cna = (record.get("containers") or {}).get("cna") or {}
     values: set[str] = set()
@@ -90,9 +97,9 @@ def publication_records(store: Store, query: str) -> list[dict[str, Any]]:
     sort_order = _one(parameters, "sort_order", "desc")
     if sort_order not in {"asc", "desc"}:
         raise InvalidParameter("sort_order", "must be 'asc' or 'desc'")
-    date_sort = _one(parameters, "date_sort", "")
-    if date_sort not in {"", "published", "updated", "reserved"}:
-        raise InvalidParameter("date_sort", "must be empty, 'published', 'updated', or 'reserved'")
+    date_sort = _one(parameters, "date_sort", "published")
+    if date_sort not in {"published", "updated", "reserved"}:
+        raise InvalidParameter("date_sort", "must be 'published', 'updated', or 'reserved'")
 
     since_text = _one(parameters, "since", "")
     since = _timestamp(since_text)
@@ -100,6 +107,7 @@ def publication_records(store: Store, query: str) -> list[dict[str, Any]]:
         raise InvalidParameter("since", "must be an ISO-8601 timestamp with a timezone")
 
     product = _one(parameters, "product", "").casefold()
+    source = _one(parameters, "source", "").casefold()
     assigner = _one(parameters, "assigner", "").casefold()
     cwe_text = _one(parameters, "cwe", "").strip()
     cwe = ""
@@ -113,11 +121,19 @@ def publication_records(store: Store, query: str) -> list[dict[str, Any]]:
     for record in store.published_gcve_records():
         metadata = _metadata(record)
         vuln_id = str(metadata.get("vulnId") or metadata.get("cveId") or "")
-        if not vuln_id.upper().startswith(LOCAL_ID_PREFIX):
+        if (not vuln_id.upper().startswith(LOCAL_ID_PREFIX)
+                or str(metadata.get("state", "")).upper() != "PUBLISHED"):
+            continue
+        local_org = os.getenv("VA_GNA_ORG_UUID", "").casefold()
+        if local_org and str(metadata.get("assignerOrgId", "")).casefold() != local_org:
             continue
         published = _timestamp(metadata.get("datePublished"))
         updated = _timestamp(metadata.get("dateUpdated"))
-        if since is not None and not any(value is not None and value >= since for value in (published, updated)):
+        selected_date = {"published": published, "updated": updated,
+                         "reserved": _timestamp(metadata.get("dateReserved"))}[date_sort]
+        if since is not None and (selected_date is None or selected_date < since):
+            continue
+        if source and source != _source(record):
             continue
         if product and product not in _products(record):
             continue

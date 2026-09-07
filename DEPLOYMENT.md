@@ -8,10 +8,10 @@ VULNARCHIVE runs two separate HTTP processes:
   It serves `/`, `/api/gcve/publication`, `/dumps/gna-1988.ndjson`,
   `/.well-known/security.txt`, and `/archive/`.
 - `vulnarchive-review.service` is the administrative review and publication UI on
-  `127.0.0.1:8765`. It must only be reached locally or through a separately secured
-  operator channel; the public Apache virtual host never proxies it.
-- `vulnarchive-sync.service` performs writes to the configured external publication
-  target (`VL_URL`) with the API key from the protected environment file.
+  the private RFC1918 address configured as `VA_REVIEW_BIND` (currently
+  `10.205.22.135:8765`). Restrict it to the operator network; the public Apache
+  virtual host never proxies it.
+- `vulnarchive-sync.service` imports new messages and commits eligible GCVE records transactionally to the same local SQLite store.
 
 There is no required local Vulnerability-Lookup installation and no dependency on port
 10001. Apache is the only public ingress. The SQLite database and both application
@@ -36,12 +36,7 @@ sudo systemctl enable --now vulnarchive-web
 sudo systemctl start vulnarchive-review
 ```
 
-Set `VL_URL` to the independently operated publication target. Put `VL_API_KEY` only in
-`/etc/vulnarchive/vulnarchive.env` (mode 0640, `root:vulnarchive`). Use a dedicated,
-least-privileged publisher credential. No credential is loaded by the public process for
-handling requests, and its HTTP handler implements GET only.
-
-Configure `VA_SECURITY_CONTACT` and refresh `VA_SECURITY_EXPIRES` before it expires.
+`VL_URL` is optional and is used by the importer only for read-only resolution of foreign identifiers. The review service has no Vulnerability-Lookup connection and performs no external writes. GCVE reservation and publication require no external account or API key. Set `VA_REVIEW_BIND=10.205.22.135` and allow TCP/8765 only from the trusted RFC1918 operator network. No credential is loaded by the public process, and its HTTP handler implements GET only. The static `deploy/security.txt` is the single discovery document served by Apache and mirrored by the application.
 
 ## Apache and public acceptance
 
@@ -60,13 +55,13 @@ curl --fail https://vuln.freearchive.org/.well-known/security.txt
 curl --fail -X POST https://vuln.freearchive.org/api/gcve/publication && exit 1 || true
 ```
 
-Confirm that `/review`, `/connection`, `/publish`, and `/observation` return 404 through
-the public host. The review UI remains at `127.0.0.1:8765` for an SSH tunnel or another
-authenticated operator-only ingress.
+Confirm that the unprefixed `/connection`, `/publish`, and `/observation` paths return
+404. `/review` redirects to the separately authenticated review backend at
+`https://vuln.freearchive.org/review/`; TCP/8765 remains restricted to the proxy.
 
 ## Publication and operation
 
-Before enabling periodic publication, verify the independently managed target and run:
+Before enabling periodic publication, verify the local policy and run:
 
 ```sh
 sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
@@ -78,3 +73,9 @@ public and sync units separately. For upgrades, stop the timer, back up SQLite, 
 staging, validate BCP-03 pagination, `since` filtering, dump equivalence and archive
 URLs, then atomically deploy and restart. Restore both code and the matching database
 backup if rollback is required.
+
+## Authenticated review reverse proxy
+
+The review application requires HTTP Basic authentication and a client-IP allowlist. Set `VA_REVIEW_PREFIX=/review`, `VA_REVIEW_USERNAME`, and a long random `VA_REVIEW_PASSWORD`. Set `VA_REVIEW_ALLOWED_NETWORKS` to the operator/VPN CIDRs and `VA_REVIEW_TRUSTED_PROXIES` only to the reverse proxy CIDRs. Forwarded client addresses are ignored from every other peer, and absent credentials fail closed with HTTP 503.
+
+The main Apache virtual host maps `/review/` to `10.205.22.135:8765` and overwrites `X-Forwarded-For` with the actual TCP peer before proxying. Install `deploy/apache-vuln.freearchive.org.conf`, run `apachectl configtest`, and restrict TCP/8765 so only the proxy can reach it.
