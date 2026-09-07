@@ -166,6 +166,18 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(result.proposed_type, "published-proof-of-concept")
         self.assertTrue(result.relevant)
 
+    def test_invalid_placeholder_link_does_not_reject_message(self):
+        source = "https://seclists.org/fulldisclosure/2026/Jul/9"
+        message = parse_message(
+            '''<html><head><meta name="Subject" content="CWP advisory"></head><body>
+            <h1 class="m-title">CWP advisory</h1><pre>Vulnerability details
+            <a href="http://[CWP_Host]/login">example target</a>
+            <a href="/fulldisclosure/2026/Jul/8">valid reference</a></pre></body></html>''',
+            source,
+        )
+        self.assertEqual(message.title, "CWP advisory")
+        self.assertEqual(message.links, ["https://seclists.org/fulldisclosure/2026/Jul/8"])
+
     def test_month(self):
         html = '<blockquote><a name="1" href="1">one</a><a href="2">two</a></blockquote><a href="3">no</a>'
         self.assertEqual(parse_month(html, "https://seclists.org/fulldisclosure/2026/Sep/date.html"), [
