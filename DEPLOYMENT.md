@@ -10,8 +10,7 @@ VULNARCHIVE runs two separate HTTP processes:
 - `vulnarchive-review.service` is the administrative review and publication UI on
   `127.0.0.1:8765`. It must only be reached locally or through a separately secured
   operator channel; the public Apache virtual host never proxies it.
-- `vulnarchive-sync.service` performs writes to the configured external publication
-  target (`VL_URL`) with the API key from the protected environment file.
+- `vulnarchive-sync.service` imports new messages and commits eligible GCVE records transactionally to the same local SQLite store.
 
 There is no required local Vulnerability-Lookup installation and no dependency on port
 10001. Apache is the only public ingress. The SQLite database and both application
@@ -36,12 +35,7 @@ sudo systemctl enable --now vulnarchive-web
 sudo systemctl start vulnarchive-review
 ```
 
-Set `VL_URL` to the independently operated publication target. Put `VL_API_KEY` only in
-`/etc/vulnarchive/vulnarchive.env` (mode 0640, `root:vulnarchive`). Use a dedicated,
-least-privileged publisher credential. No credential is loaded by the public process for
-handling requests, and its HTTP handler implements GET only.
-
-Configure `VA_SECURITY_CONTACT` and refresh `VA_SECURITY_EXPIRES` before it expires.
+`VL_URL` is optional and is used only for read-only resolution of foreign identifiers. GCVE reservation and publication require no external account or API key. No credential is loaded by the public process, and its HTTP handler implements GET only. The static `deploy/security.txt` is the single discovery document served by Apache and mirrored by the application.
 
 ## Apache and public acceptance
 
@@ -66,7 +60,7 @@ authenticated operator-only ingress.
 
 ## Publication and operation
 
-Before enabling periodic publication, verify the independently managed target and run:
+Before enabling periodic publication, verify the local policy and run:
 
 ```sh
 sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
