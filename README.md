@@ -96,7 +96,7 @@ Start the local review interface:
 fd-sightings review
 ```
 
-In production, set `VA_REVIEW_BIND=10.205.22.135` and expose it through the dedicated authenticated reverse proxy at `https://review.vuln.freearchive.org/`. The CLI still
+In production, set `VA_REVIEW_BIND=10.205.22.135` and expose it through the authenticated reverse-proxy path at `https://vuln.freearchive.org/review/`. The CLI still
 defaults to localhost when it is started outside the supplied systemd unit. The
 interface supports queue filters, source evidence, match overrides, approval,
 rejection, and review notes.

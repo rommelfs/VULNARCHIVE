@@ -38,6 +38,12 @@ class SecurityTxtTests(unittest.TestCase):
         self.assertIn('Alias "/.well-known/security.txt" "/opt/vulnarchive/deploy/security.txt"', config)
         self.assertIn('Header always set Content-Type "text/plain; charset=utf-8"', config)
 
+    def test_apache_proxies_authenticated_review_prefix(self):
+        config = (ROOT / "deploy" / "apache-vuln.freearchive.org.conf").read_text(encoding="utf-8")
+        self.assertIn("RedirectMatch 302 ^/review$ /review/", config)
+        self.assertIn("ProxyPass        /review/ http://10.205.22.135:8765/", config)
+        self.assertIn("RequestHeader set X-Forwarded-For expr=%{REMOTE_ADDR}", config)
+
 
 if __name__ == "__main__":
     unittest.main()

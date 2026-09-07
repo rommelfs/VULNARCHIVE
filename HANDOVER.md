@@ -31,6 +31,6 @@ fd-sightings sync --retry-failed
 fd-sightings public --bind 127.0.0.1 --port 8766
 ```
 
-Before rollout, run the unit suite, compile check, and hermetic BCP-03 acceptance suite documented in `README.md`. Then run `apachectl configtest`, confirm public GET routes, and confirm administrative and write routes return 404/405.
+Before rollout, run the unit suite, compile check, and hermetic BCP-03 acceptance suite documented in `README.md`. Then run `apachectl configtest`, confirm public GET routes, verify authentication and the IP allowlist at `/review/`, and confirm unprefixed administrative and write routes return 404/405.
 
 Do not expose SQLite or port 8766 directly. Expose port 8765 only on the RFC1918 interface and only to the trusted operator subnet. Back up the SQLite database before upgrades and historical imports. Publication reservations are idempotent and must be reused after failures.

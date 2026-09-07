@@ -55,9 +55,9 @@ curl --fail https://vuln.freearchive.org/.well-known/security.txt
 curl --fail -X POST https://vuln.freearchive.org/api/gcve/publication && exit 1 || true
 ```
 
-Confirm that `/review`, `/connection`, `/publish`, and `/observation` return 404 through
-the public host. Reach the review UI directly at `http://10.205.22.135:8765/` only from
-the firewall-restricted operator network; do not add it to the public virtual host.
+Confirm that the unprefixed `/connection`, `/publish`, and `/observation` paths return
+404. `/review` redirects to the separately authenticated review backend at
+`https://vuln.freearchive.org/review/`; TCP/8765 remains restricted to the proxy.
 
 ## Publication and operation
 
@@ -76,15 +76,6 @@ backup if rollback is required.
 
 ## Authenticated review reverse proxy
 
-The review application requires HTTP Basic authentication and a client-IP allowlist.
-Set `VA_REVIEW_USERNAME` and a long random `VA_REVIEW_PASSWORD`. Set
-`VA_REVIEW_ALLOWED_NETWORKS` to the operator/VPN CIDRs and
-`VA_REVIEW_TRUSTED_PROXIES` only to the reverse proxy CIDRs. Forwarded client
-addresses are ignored from every other peer. The service fails closed with HTTP 503
-when credentials are absent.
+The review application requires HTTP Basic authentication and a client-IP allowlist. Set `VA_REVIEW_PREFIX=/review`, `VA_REVIEW_USERNAME`, and a long random `VA_REVIEW_PASSWORD`. Set `VA_REVIEW_ALLOWED_NETWORKS` to the operator/VPN CIDRs and `VA_REVIEW_TRUSTED_PROXIES` only to the reverse proxy CIDRs. Forwarded client addresses are ignored from every other peer, and absent credentials fail closed with HTTP 503.
 
-For the dedicated `review.vuln.freearchive.org` hostname, install
-`deploy/apache-review.vuln.freearchive.org.conf`. Its proxy overwrites
-`X-Forwarded-For` with Apache's authenticated TCP peer address, preventing clients
-from spoofing an allowed address. Obtain the matching TLS certificate, run
-`apachectl configtest`, and restrict TCP/8765 so only the proxy can reach it.
+The main Apache virtual host maps `/review/` to `10.205.22.135:8765` and overwrites `X-Forwarded-For` with the actual TCP peer before proxying. Install `deploy/apache-vuln.freearchive.org.conf`, run `apachectl configtest`, and restrict TCP/8765 so only the proxy can reach it.

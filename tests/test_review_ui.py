@@ -18,6 +18,7 @@ class ReviewUITest(unittest.TestCase):
         self.environment = {
             "VA_REVIEW_USERNAME": "analyst",
             "VA_REVIEW_PASSWORD": "correct horse",
+            "VA_REVIEW_PREFIX": "/review",
             "VA_REVIEW_ALLOWED_NETWORKS": "192.0.2.0/24",
             "VA_REVIEW_TRUSTED_PROXIES": "127.0.0.0/8",
         }
@@ -56,6 +57,7 @@ class ReviewUITest(unittest.TestCase):
             body = response.read().decode()
         self.assertNotIn("Vulnerability-Lookup", body)
         self.assertNotIn("Connection settings", body)
+        self.assertIn('href="/review/publish"', body)
         with self.assertRaises(urllib.error.HTTPError) as raised:
             urllib.request.urlopen(self.request("/connection"))
         self.assertEqual(raised.exception.code, 404)

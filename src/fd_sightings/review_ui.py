@@ -45,6 +45,8 @@ class ReviewServer(HTTPServer):
         self.csrf_token = secrets.token_urlsafe(24)
         self.auth_username = os.environ.get("VA_REVIEW_USERNAME", "")
         self.auth_password = os.environ.get("VA_REVIEW_PASSWORD", "")
+        prefix = os.environ.get("VA_REVIEW_PREFIX", "/review").strip()
+        self.url_prefix = "/" + prefix.strip("/") if prefix.strip("/") else ""
         self.allowed_networks = _networks(os.environ.get("VA_REVIEW_ALLOWED_NETWORKS", "127.0.0.0/8"))
         self.trusted_proxies = _networks(os.environ.get("VA_REVIEW_TRUSTED_PROXIES", "127.0.0.0/8"))
 
@@ -63,6 +65,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
         return
 
     def _send(self, body: bytes, status: int = 200, content_type: str = "text/html; charset=utf-8") -> None:
+        if content_type.startswith("text/html") and self.server.url_prefix:
+            page = body.decode("utf-8")
+            page = page.replace('href="/', f'href="{self.server.url_prefix}/')
+            page = page.replace('action="/', f'action="{self.server.url_prefix}/')
+            body = page.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -72,6 +79,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _redirect(self, location: str) -> None:
+        if location.startswith("/") and self.server.url_prefix:
+            location = self.server.url_prefix + location
         self.send_response(303)
         self.send_header("Location", location)
         self.end_headers()
