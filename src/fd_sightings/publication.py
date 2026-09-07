@@ -117,7 +117,7 @@ def build_gcve_record(
                     "type": "related" if any(
                         isinstance(match, dict)
                         and str(match.get("vulnerability_id", "")).upper() == target.upper()
-                        and match.get("method") == "explicit-id"
+                        and match.get("method") in {"explicit-id", "analyst-approved"}
                         for match in list(row.get("matches") or [])
                     ) else "possibly_related",
                 }
@@ -279,6 +279,9 @@ def execute_automatic_publication(
         current = outcomes[-1]["operations"]
         if plan.action == "archive-only":
             current.append({"kind": "archive", "status": "complete"})
+            continue
+        if plan.action == "review-required":
+            current.append({"kind": "review", "status": "required", "reason": plan.reason})
             continue
 
         if policy.publish_sightings:

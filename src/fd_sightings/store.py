@@ -702,12 +702,13 @@ class Store:
                 for match in candidate["matches"] if isinstance(match, dict)
             }
             candidate["matches"] = [
-                existing.get(identifier, {
+                {
+                    **existing.get(identifier, {}),
                     "vulnerability_id": identifier,
                     "method": "analyst-approved",
                     "confidence": 1.0,
-                    "title": "",
-                })
+                    "title": str(existing.get(identifier, {}).get("title") or ""),
+                }
                 for identifier in candidate["reviewed_vulnerability_ids"]
             ]
         return candidates
