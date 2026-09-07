@@ -37,15 +37,14 @@ python3 -m venv .venv
 python -m pip install -e .
 ```
 
-Set a meaningful user agent. Add an API key for the authenticated rate-limit and for submissions:
+Set a meaningful user agent. A read-only Vulnerability-Lookup URL is optional for resolving foreign identifiers:
 
 ```sh
 export FD_USER_AGENT='VULNARCHIVE/0.2 (security-team@example.org)'
 export VL_URL='https://vuln.freearchive.org'
-export VL_API_KEY='...'
 ```
 
-For production use `VL_URL=https://vuln.freearchive.org`. A complete policy template is provided in `config/vulnarchive.env.example`.
+GCVE-1988 reservations and publications always use the canonical local SQLite store. A complete policy template is provided in `config/vulnarchive.env.example`.
 
 ## Pilot
 
@@ -91,60 +90,19 @@ Start the local review interface:
 fd-sightings review
 ```
 
-Then open `http://127.0.0.1:8765`. The interface binds only to localhost by default. It supports queue filters, the original Full Disclosure body, extracted evidence, candidate selection, manual vulnerability-ID overrides, review notes, approval, rejection, and resetting a decision.
+In production, set `VA_REVIEW_BIND=10.205.22.135` and open
+`http://10.205.22.135:8765/` from the trusted operator network. The CLI still
+defaults to localhost when it is started outside the supplied systemd unit. The
+interface supports queue filters, source evidence, match overrides, approval,
+rejection, and review notes.
 
-The connection panel reports whether the configured Vulnerability-Lookup instance is unreachable, connected read-only, or authenticated. `Test connection` refreshes the check against `/.well-known/api-policy.json` and `/api/user/me`.
-
-The API key can be supplied from the process environment or entered under `Connection settings`. It is never written to SQLite or browser storage; a key entered in the UI exists only in the server process and is lost when it stops. To start with an environment-provided key:
-
-```sh
-export VL_URL='https://vuln.freearchive.org'
-export VL_API_KEY='your-personal-api-key'
-fd-sightings review
-```
-
-Approving an observation validates the selected vulnerability ID against the configured live instance. Once approved, its detail page offers `Publish approved Sighting`. This is an immediate single-Sighting operation and records successful or duplicate responses in the local submission ledger.
+The review interface has no connection or credential settings and performs no external writes. Its publication dashboard creates BCP-05 records transactionally in the local store; Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 
 ```sh
 fd-sightings --no-semantic archive --from-period 2025-01 --to-period 2025-12
 ```
-
-## Submission
-
-Submission is deliberately one reviewed source/ID pair at a time. Without `--write`, the command prints the proposed request:
-
-```sh
-fd-sightings submit \
-  --source-url https://seclists.org/fulldisclosure/2026/Sep/27 \
-  --vulnerability-id CVE-2026-77939
-```
-
-After review:
-
-```sh
-fd-sightings submit \
-  --source-url https://seclists.org/fulldisclosure/2026/Sep/27 \
-  --vulnerability-id CVE-2026-77939 \
-  --write
-```
-
-To inspect all UI-approved observations without sending anything:
-
-```sh
-fd-sightings submit-approved
-```
-
-To submit the approved queue:
-
-```sh
-fd-sightings submit-approved --write
-```
-
-Use `--limit N` for controlled production batches. Successfully submitted source/ID/type combinations are recorded locally and excluded from later approved batches. Duplicate responses from the server are also recorded as completed.
-
-The API key is sent only to the configured Vulnerability-Lookup host. HTTP 409 is recorded as an idempotent duplicate result. The UI refuses publication unless `/api/user/me` confirms the key first.
 
 ## Automatic VULNARCHIVE publication
 
@@ -186,18 +144,11 @@ Policy thresholds are configured through environment variables:
 
 The evidence score is deterministic and records which publication rule fired. It measures whether the post contains enough structured material to publish; it does not claim that the report is correct.
 
-## Publication target and public service
+## Local publication store and public service
 
-`VL_URL` identifies an independently operated API used by the collector for lookup and
-publication. VULNARCHIVE does not require a local Vulnerability-Lookup process. Run the
-separate read-only public service with `fd-sightings public`; deployment routing and the
-private review-service boundary are documented in `DEPLOYMENT.md`.
+The collector reserves and publishes GCVE-1988 records transactionally in its canonical SQLite store. `VL_URL` is optional and only supports read-only resolution of foreign identifiers. Run the isolated public service with `fd-sightings public`; deployment routing and the private review-service boundary are documented in `DEPLOYMENT.md`.
 
-The archive service additionally exposes `GET /dumps/gna-1988.ndjson`. It pages
-through that canonical publication endpoint, filters for published
-`GCVE-1988-*` records, sorts them deterministically on disk, and streams compact
-UTF-8 NDJSON without a response envelope. Apache routes this one dump path to
-the archive service.
+The public service exposes the same canonical records as a bare BCP-03 JSON list at `GET /api/gcve/publication` and as compact, deterministically ordered UTF-8 NDJSON at `GET /dumps/gna-1988.ndjson`.
 
 ## Matching policy
 
