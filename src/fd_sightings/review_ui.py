@@ -7,9 +7,11 @@ import os
 import re
 import secrets
 import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .store import Store
+from .workers import ImportWorkerManager
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
 
@@ -18,10 +20,11 @@ def _e(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
-def _layout(title: str, content: str) -> bytes:
+def _layout(title: str, content: str, *, refresh: int = 0) -> bytes:
+    refresh_meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_e(title)} · VULNARCHIVE</title><style>
+{refresh_meta}<title>{_e(title)} · VULNARCHIVE</title><style>
 :root{{--bg:#f5f3ee;--panel:#fff;--ink:#1d242c;--muted:#65707b;--line:#d8d4ca;--accent:#315e52;--warn:#9d6114;--bad:#983b3b}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}}
 header{{background:#18332d;color:white;padding:18px 28px}}header a{{color:white;text-decoration:none}}main{{max-width:1180px;margin:24px auto;padding:0 20px}}
@@ -34,7 +37,7 @@ th{{color:var(--muted);font-size:12px;text-transform:uppercase}}.tag{{display:in
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px;border-radius:7px;max-height:520px;overflow:auto}}
 .grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}label{{display:block;font-weight:600;margin:12px 0 5px}}textarea{{width:100%;min-height:90px}}
 @media(max-width:800px){{.grid{{grid-template-columns:1fr}}table{{display:block;overflow:auto}}}}
-</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a></div></header><main>{content}</main></body></html>"""
+</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main>{content}</main></body></html>"""
     return page.encode("utf-8")
 
 
@@ -42,6 +45,7 @@ class ReviewServer(HTTPServer):
     def __init__(self, address: tuple[str, int], store: Store):
         super().__init__(address, ReviewHandler)
         self.store = store
+        self.workers = ImportWorkerManager(store.path)
         self.csrf_token = secrets.token_urlsafe(24)
         self.auth_username = os.environ.get("VA_REVIEW_USERNAME", "")
         self.auth_password = os.environ.get("VA_REVIEW_PASSWORD", "")
@@ -128,6 +132,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._detail(params.get("source", [""])[0])
         elif parsed.path == "/publish":
             self._publication_dashboard()
+        elif parsed.path == "/workers":
+            self._workers(params)
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
@@ -139,6 +145,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/publish":
             self._publish()
+            return
+        if self.path == "/workers":
+            self._start_worker()
             return
         if self.path != "/review":
             self._send(b"Not found", 404, "text/plain")
@@ -186,6 +195,59 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(_layout("Publish error", '<div class="panel"><h1>Unsupported publication mode</h1><p>VULNARCHIVE publishes only to its local BCP-03/BCP-05 store.</p></div>'), 400)
             return
         self._publish_automatic(data)
+
+    def _start_worker(self) -> None:
+        data = self._form_data()
+        if data is None:
+            return
+        try:
+            limit = int(data.get("limit", ["0"])[0] or 0)
+            job = self.server.workers.submit(
+                data.get("from_period", [""])[0],
+                data.get("to_period", [""])[0],
+                limit=limit,
+                semantic=data.get("semantic", [""])[0] == "1",
+                refresh=data.get("refresh", [""])[0] == "1",
+            )
+        except (ValueError, OSError) as exc:
+            self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
+            return
+        self._redirect("/workers?" + urllib.parse.urlencode({"job": job["id"]}))
+
+    def _workers(self, params: dict[str, list[str]]) -> None:
+        jobs = self.server.workers.jobs()
+        selected = self.server.workers.get(params.get("job", [""])[0])
+        rows = "".join(
+            f'<tr><td><a href="{_e("/workers?" + urllib.parse.urlencode({"job": job["id"]}))}">{_e(job["id"][:10])}</a></td>'
+            f'<td>{_e(job["from_period"])} – {_e(job["to_period"])}</td><td class="{_e(job["status"])}">{_e(job["status"])}</td>'
+            f'<td>{_e(job["created_at"])}</td></tr>' for job in jobs
+        )
+        detail = ""
+        if selected:
+            log = self.server.workers.log_tail(selected)
+            feedback = "This view refreshes every 2 seconds." if selected["status"] in {"queued", "running"} else "Final output"
+            detail = (f'<div class="panel"><h2>Worker {_e(selected["id"])}</h2>'
+                      f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected["return_code"])}</p>'
+                      f'<p class="muted">{feedback}</p>'
+                      f'<pre>{_e(log or "No output yet.")}</pre></div>')
+        now = datetime.now(timezone.utc)
+        current_month = f"{now.year:04d}-{now.month:02d}"
+        previous_year = now.year if now.month > 1 else now.year - 1
+        previous_month_number = now.month - 1 if now.month > 1 else 12
+        previous_month = f"{previous_year:04d}-{previous_month_number:02d}"
+        content = f'''<div class="panel"><h1>Historical archive imports</h1>
+<p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
+<form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
+<p class="muted">Use the calendar controls to select complete archive months. Future months cannot be queued.</p>
+<div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
+<label>To month <input type="month" name="to_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="Last archive month"></label>
+<label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
+<label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
+<label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>
+<div class="panel"><h2>Workers</h2><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
+<tbody>{rows or '<tr><td colspan="4">No import workers yet.</td></tr>'}</tbody></table></div>{detail}'''
+        auto_refresh = 2 if selected and selected["status"] in {"queued", "running"} else 0
+        self._send(_layout("Archive imports", content, refresh=auto_refresh))
 
     def _publish_source(self, data: dict[str, list[str]]) -> None:
         from .policy import PublicationPolicy
@@ -301,11 +363,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
             f'{_e(match["vulnerability_id"])} — {_e(match["title"])} ({_e(match["confidence"])})</option>'
             for match in matches
         )
+        match_analysis = "".join(
+            f'<li><strong>{_e(match.get("vulnerability_id", ""))}</strong> · {_e(match.get("method", ""))} · {_e(match.get("confidence", 0))}'
+            f'<br><span class="muted">Evidence: {_e(", ".join(match.get("evidence", [])) or "none")}</span>'
+            f'<br><span class="rejected">Contradictions: {_e(", ".join(match.get("contradictions", [])) or "none")}</span></li>'
+            for match in matches
+        )
         evidence = "".join(f"<li>{_e(item)}</li>" for item in extraction.get("poc_evidence", []))
         content = f"""<p><a href="/">← Queue</a></p><div class="grid"><section>
 <div class="panel"><h1>{_e(row['title'])}</h1><p class="muted">{_e(row['author'])} · {_e(row['published'])}</p>
 <p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open Full Disclosure source</a></p>
 <h3>Extraction</h3><p>Product: <strong>{_e(extraction.get('product_hint',''))}</strong> · Proposed type: <strong>{_e(extraction.get('proposed_type',''))}</strong> · PoC score: <strong>{_e(extraction.get('poc_score',0))}</strong></p><ul>{evidence or '<li>No PoC indicators</li>'}</ul>
+<h3>Candidate analysis</h3><ul>{match_analysis or '<li>No candidates</li>'}</ul>
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
 <p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
 <form method="post" action="/review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="source" value="{_e(source)}">

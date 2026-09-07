@@ -68,11 +68,68 @@ sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
 sudo systemctl enable --now vulnarchive-sync.timer
 ```
 
+The authenticated review UI includes an **Archive imports** page. Operators can
+queue a start month, end month, optional per-month limit, and whether candidate
+matching is enabled. Historical workers execute sequentially to limit upstream
+load and SQLite contention. Their JSON status and captured command output are
+stored in `/opt/vulnarchive/data/workers/`. Starting an archive worker imports
+observations only; publication remains a separate policy-controlled operation.
+
 Back up `/opt/vulnarchive/data`, configuration, and the publication ledger. Monitor the
-public and sync units separately. For upgrades, stop the timer, back up SQLite, deploy to
-staging, validate BCP-03 pagination, `since` filtering, dump equivalence and archive
-URLs, then atomically deploy and restart. Restore both code and the matching database
-backup if rollback is required.
+public and sync units separately.
+
+## Upgrade
+
+Run the supplied upgrade script from any directory; it operates on
+`/opt/vulnarchive` by default:
+
+```sh
+sudo /opt/vulnarchive/deploy/upgrade.sh
+```
+
+Do not run `git pull` or `pip install` separately. The script removes disposable
+`build/` and `src/*.egg-info/` artifacts and refuses modified tracked files,
+performs a fast-forward-only pull, tests the target source before downtime, stops the
+sync timer and application processes, creates a consistent SQLite backup, preserves the
+configuration and previous Git revision, reinstalls the package, updates the systemd
+units, applies store migrations through a non-publishing plan, restores only services
+that were active, and checks the local public endpoint. Backups are stored below
+`/var/backups/vulnarchive` by default.
+
+When upgrading once from an older script that still rejects these generated
+untracked directories, bootstrap the fixed script as follows:
+
+```sh
+cd /opt/vulnarchive
+rm -rf -- build src/fd_sightings.egg-info
+git pull --ff-only
+sudo ./deploy/upgrade.sh --no-pull
+```
+
+This one-time sequence is only necessary for the affected older script. New versions
+remove untracked build artifacts both before the Git check and after package installation.
+Confirm that the fixed script is actually present before rerunning it:
+
+```sh
+/opt/vulnarchive/deploy/upgrade.sh --version
+# VULNARCHIVE upgrade script 2
+```
+
+If `--version` is rejected, or the output still says `uncommitted changes` rather than
+`modified tracked files`, the checkout is still on the old revision. Running that old
+script again cannot install a fix which is not present on its configured Git branch.
+
+If another deployment mechanism has already checked out the desired revision, use:
+
+```sh
+sudo /opt/vulnarchive/deploy/upgrade.sh --no-pull
+```
+
+Staging and nonstandard installations can override `VULNARCHIVE_APP_DIR`,
+`VULNARCHIVE_VENV_DIR`, `VULNARCHIVE_ENV_FILE`, `VULNARCHIVE_BACKUP_DIR`, and
+`VULNARCHIVE_DB_FILE`. On a failure after services have stopped, the script attempts to
+start the previously active services again and prints the old revision and backup path.
+For a full rollback, restore both that Git revision and its matching SQLite backup.
 
 ## Authenticated review reverse proxy
 
