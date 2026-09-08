@@ -74,6 +74,23 @@ class PublicUITest(unittest.TestCase):
         _, security, _ = self.get("/.well-known/security.txt")
         self.assertEqual(b"GCVE: https://vuln.freearchive.org\n", security)
 
+    def test_home_page_explains_gcve_bcp_and_links_reference_implementations(self) -> None:
+        _, body, content_type = self.get("/")
+        page = body.decode()
+        self.assertEqual("text/html", content_type)
+        for link in (
+            "https://gcve.eu/bcp/",
+            "https://github.com/GCVE-EU",
+            "https://vulnerability.circl.lu",
+            "https://github.com/cve-search/vulnerability-lookup",
+            "https://github.com/rommelfs/VULNARCHIVE",
+            "https://gcve.eu/bcp/gcve-bcp-03/",
+            "https://gcve.eu/bcp/gcve-bcp-05/",
+        ):
+            self.assertIn(f'href="{link}"', page)
+        self.assertIn("descriptive rather than prescriptive", page)
+        self.assertIn("second reference implementation of the GCVE BCPs", page)
+
     def test_archive_is_grouped_by_month_with_dates_and_pagination(self) -> None:
         _, body, content_type = self.get("/archive/?per_page=2")
         page = body.decode()
