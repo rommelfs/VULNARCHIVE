@@ -62,6 +62,18 @@ class ImportWorkerManagerTests(unittest.TestCase):
                 manager.submit("2024-01", future)
             manager.executor.shutdown(wait=True)
 
+    def test_worker_history_is_bounded_before_job_files_are_loaded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ImportWorkerManager(Path(directory) / "archive.sqlite")
+            try:
+                for number in range(5):
+                    manager._write({"id": f"job{number}", "created_at": f"2026-01-0{number + 1}"})
+                self.assertEqual(len(manager.jobs(limit=2)), 2)
+                with self.assertRaises(ValueError):
+                    manager.jobs(limit=0)
+            finally:
+                manager.executor.shutdown(wait=True)
+
 
 if __name__ == "__main__":
     unittest.main()

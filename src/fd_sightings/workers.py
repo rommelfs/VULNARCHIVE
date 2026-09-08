@@ -147,8 +147,15 @@ class ImportWorkerManager:
         except (FileNotFoundError, ValueError, TypeError):
             return None
 
-    def jobs(self) -> list[dict[str, Any]]:
-        result = [job for path in self.directory.glob("*.json") if (job := self.get(path.stem))]
+    def jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("worker list limit must be between 1 and 1000")
+        paths = sorted(
+            self.directory.glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )[:limit]
+        result = [job for path in paths if (job := self.get(path.stem))]
         return sorted(result, key=lambda job: str(job.get("created_at", "")), reverse=True)
 
     def log_tail(self, job: dict[str, Any], maximum: int = 20_000) -> str:

@@ -103,19 +103,26 @@ class ReviewUITest(unittest.TestCase):
         class Workers:
             def __init__(self):
                 self.submitted = []
+                self.job_list_calls = 0
 
             def submit(self, start, end, *, limit=0, semantic=False, refresh=False, sources=None):
                 self.submitted.append((start, end, limit, semantic, refresh, sources))
                 return {"id": "abc123"}
 
-            def jobs(self):
+            def jobs(self, *, limit=100):
+                self.job_list_calls += 1
+                self.assert_limit = limit
                 return [{
                     "id": "abc123", "from_period": "2024-01", "to_period": "2024-03",
                     "status": "queued", "created_at": "2026-09-07T12:00:00Z", "return_code": None,
                 }]
 
             def get(self, job_id):
-                return self.jobs()[0] if job_id == "abc123" else None
+                return {
+                    "id": "abc123", "from_period": "2024-01", "to_period": "2024-03",
+                    "status": "queued", "created_at": "2026-09-07T12:00:00Z",
+                    "return_code": None, "sources": ["full-disclosure", "bugtraq"],
+                } if job_id == "abc123" else None
 
             def log_tail(self, job):
                 return ""
@@ -124,6 +131,8 @@ class ReviewUITest(unittest.TestCase):
         self.server.workers = workers
         with urllib.request.urlopen(self.request("/workers")) as response:
             page = response.read().decode()
+        self.assertEqual(workers.job_list_calls, 1)
+        self.assertEqual(workers.assert_limit, 100)
         self.assertIn("Historical archive imports", page)
         self.assertIn('action="/review/workers"', page)
         self.assertEqual(page.count('type="month"'), 2)
@@ -163,8 +172,11 @@ class ReviewUITest(unittest.TestCase):
         )])
         with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
             live_page = response.read().decode()
+        self.assertEqual(workers.job_list_calls, 1)
         self.assertIn('<meta http-equiv="refresh" content="2">', live_page)
         self.assertIn("This view refreshes every 2 seconds.", live_page)
+        self.assertIn("Sources:", live_page)
+        self.assertNotIn("Most recent workers", live_page)
 
     def test_approved_observation_links_to_publication_and_published_record(self) -> None:
         source = "https://seclists.org/fulldisclosure/2026/Sep/42"
