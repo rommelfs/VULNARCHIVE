@@ -47,7 +47,13 @@ def process_urls(
             message = adapter.parse(html, url) if adapter else parse_message(html, url)
             extraction = extract(message)
             matches = lookup.match(message, extraction, semantic=semantic) if extraction.relevant else []
-            store.save(message, extraction, matches)
+            analysis = getattr(
+                lookup, "last_analysis", {"result": [match.as_dict() for match in matches]},
+            ) if extraction.relevant else None
+            store.save(
+                message, extraction, matches, analysis=analysis,
+                analysis_trigger="reprocess" if refresh else "import",
+            )
             results.append(Result(message, extraction, matches))
         except (OSError, RuntimeError, ValueError) as exc:
             results.append(Result(Message(url, ""), Extraction(), [], error=str(exc)))

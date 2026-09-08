@@ -77,6 +77,27 @@ CREATE TABLE IF NOT EXISTS review_settings (
     setting_key TEXT PRIMARY KEY,
     setting_value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS analysis_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url TEXT NOT NULL,
+    trigger_name TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    input_sha256 TEXT NOT NULL DEFAULT '',
+    response_id TEXT NOT NULL DEFAULT '',
+    retrieval_at TEXT NOT NULL,
+    context_json TEXT NOT NULL DEFAULT '{}',
+    candidates_json TEXT NOT NULL DEFAULT '[]',
+    deterministic_json TEXT NOT NULL DEFAULT '[]',
+    llm_output_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_url) REFERENCES observations(source_url) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS analysis_events_source_idx
+    ON analysis_events (source_url, event_id DESC);
 CREATE TABLE IF NOT EXISTS automatic_publications (
     source_url TEXT NOT NULL,
     publication_key TEXT NOT NULL,
@@ -593,7 +614,10 @@ class Store:
     def seen(self, source_url: str) -> bool:
         return self.db.execute("SELECT 1 FROM observations WHERE source_url = ?", (source_url,)).fetchone() is not None
 
-    def save(self, message: Message, extraction: Extraction, matches: list[Match]) -> None:
+    def save(
+        self, message: Message, extraction: Extraction, matches: list[Match], *,
+        analysis: dict[str, object] | None = None, analysis_trigger: str = "import",
+    ) -> None:
         canonical_key = message.message_id.strip().casefold() or message.source_url
         existing = self.db.execute(
             "SELECT source_url FROM observations WHERE source_id=? AND canonical_key=?",
@@ -639,6 +663,8 @@ class Store:
             "INSERT OR IGNORE INTO sources(source_id, name) VALUES (?, ?)",
             (message.source_id, message.source_id.replace("-", " ").title()),
         )
+        if analysis is not None:
+            self._insert_analysis_event(message.source_url, analysis_trigger, analysis)
         self.db.commit()
 
     def record_submission(self, source_url: str, vulnerability_id: str, sighting_type: str, response: object) -> None:
@@ -916,6 +942,47 @@ class Store:
         for row in rows:
             event = dict(row)
             event["vulnerability_ids"] = json.loads(str(event.pop("vulnerability_ids_json")))
+            events.append(event)
+        return events
+
+    def record_analysis_event(self, source_url: str, trigger_name: str, analysis: dict[str, object]) -> None:
+        """Persist one immutable matching run after its observation projection."""
+        self._insert_analysis_event(source_url, trigger_name, analysis)
+        self.db.commit()
+
+    def _insert_analysis_event(self, source_url: str, trigger_name: str, analysis: dict[str, object]) -> None:
+        self.db.execute(
+            """INSERT INTO analysis_events
+            (source_url, trigger_name, provider, model, prompt_version, input_sha256,
+             response_id, retrieval_at, context_json, candidates_json, deterministic_json,
+             llm_output_json, result_json, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                source_url, trigger_name, str(analysis.get("provider") or ""),
+                str(analysis.get("model") or ""), str(analysis.get("prompt_version") or ""),
+                str(analysis.get("input_sha256") or ""), str(analysis.get("response_id") or ""),
+                str(analysis.get("retrieval_at") or self._utc_now()),
+                json.dumps({"semantic": analysis.get("semantic"), "explicit_ids": analysis.get("explicit_ids") or []}),
+                json.dumps(analysis.get("candidates") or []),
+                json.dumps(analysis.get("deterministic_matches") or []),
+                json.dumps(analysis.get("llm_output") or {}),
+                json.dumps(analysis.get("result") or []), str(analysis.get("error") or "")[:2000],
+            ),
+        )
+
+    def analysis_events(self, source_url: str, limit: int = 20) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("analysis event limit must be between 1 and 100")
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            "SELECT * FROM analysis_events WHERE source_url=? ORDER BY event_id DESC LIMIT ?",
+            (source_url, limit),
+        )
+        events = []
+        for row in rows:
+            event = dict(row)
+            for name in ("context_json", "candidates_json", "deterministic_json", "llm_output_json", "result_json"):
+                event[name.removesuffix("_json")] = json.loads(str(event.pop(name)))
             events.append(event)
         return events
 

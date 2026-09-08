@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import base64
 import ipaddress
+import json
 import os
 import re
 import secrets
@@ -515,6 +516,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                      [match["vulnerability_id"] for match in matches])
         sighting_type = str(row["reviewed_sighting_type"] or extraction.get("proposed_type", "seen"))
         history = self.server.store.review_events(source)
+        analyses = self.server.store.analysis_events(source)
         history_rows = "".join(
             f"<tr><td>{_e(event['created_at'])}</td><td>{_e(event['actor'] or 'unknown')}</td>"
             f"<td class=\"{_e(event['review_state'])}\">{_e(event['review_state'])}</td>"
@@ -526,6 +528,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
             '<p class="pending"><strong>Awaiting approval by a second reviewer.</strong></p>'
             if self.server.store.four_eyes_enabled() and row["review_state"] == "pending"
             and history and history[0]["review_state"] == "approved" else ""
+        )
+        analysis_rows = "".join(
+            f"<tr><td>{_e(event['created_at'])}</td><td>{_e(event['trigger_name'])}</td>"
+            f"<td>{_e(len(event['candidates']))}</td><td>{_e(event['model'] or 'deterministic')}</td>"
+            f"<td>{_e(event['error'] or 'ok')}</td><td><details><summary>Audit data</summary>"
+            f"<pre>{_e(json.dumps(event, ensure_ascii=False, indent=2))}</pre></details></td></tr>"
+            for event in analyses
         )
         match_cards = "".join(
             f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] in chosen else ""}>'
@@ -558,6 +567,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <div class="panel"><h2>Decision history</h2><p class="muted">Append-only audit trail; newest decision first.</p>
 <table><thead><tr><th>Time</th><th>Reviewer</th><th>Decision</th><th>Vulnerabilities</th><th>Sighting type</th><th>Note</th></tr></thead>
 <tbody>{history_rows or '<tr><td colspan="6">No review decisions yet.</td></tr>'}</tbody></table></div>"""
+        content += f"""<div class="panel"><h2>Analysis history</h2><p class="muted">Immutable matching and LLM audit trail; newest run first, limited to 20 runs.</p>
+<table><thead><tr><th>Time</th><th>Trigger</th><th>Candidates</th><th>Model</th><th>Result</th><th>Details</th></tr></thead>
+<tbody>{analysis_rows or '<tr><td colspan="6">No analysis runs recorded yet.</td></tr>'}</tbody></table></div>"""
         self._send(_layout(str(row["title"]), content))
 
     def _archive_detail(self, source: str) -> None:

@@ -66,6 +66,9 @@ class ParserTests(unittest.TestCase):
                 self.assertEqual(results[0].error, "timed out")
                 self.assertFalse(results[1].error)
                 self.assertTrue(store.seen("https://example.test/ok"))
+                events = store.analysis_events("https://example.test/ok")
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["trigger_name"], "import")
                 self.assertEqual(source.calls, [
                     ("https://example.test/broken", 1),
                     ("https://example.test/ok", 1),

@@ -69,16 +69,15 @@ Vorhanden sind:
 5. Confidence-/Margin-Gates und konservative `possibly_related`-Beziehungen für
    inferierte Treffer.
 
-Noch offen sind belastbare Vendor-/Komponenten-/Alias- und Fixed-Version-
+Ein append-only Analyseprotokoll speichert inzwischen Retrieval-Zeitpunkt,
+vollständigen begrenzten Kandidatensatz, deterministische und finale Matches,
+Provider, Modell, Promptversion, Input-Hash, Response-ID, strukturierten
+LLM-Output und Fehler pro Import beziehungsweise Reprocessing. Noch offen sind
+belastbare Vendor-/Komponenten-/Alias- und Fixed-Version-
 Extraktion, breiteres und gecachtes Retrieval, starke Chronologie- und
 Versionswidersprüche sowie eine gelabelte Evaluation mit festgelegtem
-Präzisionsziel. Der Audit-Trail speichert Modellname, Response-ID, Input-Hash und
-gekürzte Begründungsfelder innerhalb der Match-Evidenz, aber weder den kompletten
-strukturierten Modelloutput noch Provider-/Promptversion, Retrieval-Zeitpunkt und
-vollständigen Kandidatensatz als unveränderliches Ereignis. Die Dokumentation
-verspricht an dieser Stelle mehr Reproduzierbarkeit als das Schema derzeit
-liefert. `automatic` sollte bis zur Evaluation und Datenschutzfreigabe gesperrt
-bleiben.
+Präzisionsziel. `automatic` sollte bis zur Evaluation und Datenschutzfreigabe
+gesperrt bleiben.
 
 ### 4. Manueller Approval-Prozess — teilweise
 
@@ -187,6 +186,8 @@ mit Allowlist sowie sortierbare Spalten für Titel, Confidence und Review-Status
 Review-Entscheidungen werden zusätzlich append-only mit Reviewer und fachlichen
 Entscheidungsdaten protokolliert; der aktuelle Zustand bleibt als performante
 Projektion auf der Beobachtung bestehen.
+Auch Import und Reprocessing erzeugen nun append-only Analyseereignisse mit dem
+vollständigen Matching- und LLM-Auditkontext.
 Der erste Schnitt aus Phase 2 ist ebenfalls umgesetzt: Source-Registry,
 Full-Disclosure-/Bugtraq-Adapter, wiederholbare CLI-Quellenauswahl, additive
 Source-Migration, Message-ID-Deduplizierung und generische Archivdetailrouten.

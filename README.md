@@ -165,6 +165,12 @@ The observation detail page shows the decision time, authenticated reviewer,
 state, selected vulnerability IDs, Sighting type, and note. The fields on the
 observation remain the current-state projection used by queue queries.
 
+Relevant imports and reprocessing runs likewise create immutable analysis
+events. They retain the trigger, retrieval time, complete bounded candidate set,
+deterministic matches, final matches, provider/model, prompt version, input hash,
+response ID, structured LLM output, and errors. The latest 20 runs can be
+inspected from the observation detail page.
+
 The bootstrap administrator configured with `VA_REVIEW_USERNAME` and
 `VA_REVIEW_PASSWORD` can open **Users** to create, reset, enable, or disable
 database-backed reviewer and administrator accounts. Managed passwords are

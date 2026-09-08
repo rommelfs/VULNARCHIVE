@@ -11,6 +11,7 @@ from .models import Extraction, Message
 
 
 MODES = {"off", "shadow", "review", "automatic"}
+PROMPT_VERSION = "vulnerability-match-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,10 @@ class LLMDecision:
     model: str
     response_id: str
     input_sha256: str
+    output: dict[str, Any]
+    candidates: tuple[dict[str, Any], ...]
+    prompt_version: str = PROMPT_VERSION
+    provider: str = "openai-responses-compatible"
 
 
 class LLMMatcher:
@@ -135,4 +140,5 @@ class LLMMatcher:
             tuple(str(value)[:1000] for value in result.get("contradictions", [])),
             tuple(str(value)[:1000] for value in result.get("missing_information", [])),
             self.model, str(response.get("id") or ""), digest,
+            dict(result), tuple(candidates),
         )

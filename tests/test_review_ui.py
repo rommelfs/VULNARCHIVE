@@ -291,6 +291,7 @@ class ReviewUITest(unittest.TestCase):
             approved = response.read().decode()
         self.assertIn("Publish this approved entry locally", approved)
         self.assertIn("Decision history", approved)
+        self.assertIn("Analysis history", approved)
         self.assertIn('href="/review/publish"', approved)
 
         record = {
