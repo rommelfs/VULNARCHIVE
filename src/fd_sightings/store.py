@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Extraction, Match, Message
+from .query import ListPage, ListQuery
 
 
 SCHEMA = """
@@ -33,6 +34,11 @@ CREATE TABLE IF NOT EXISTS observations (
     reviewed_sighting_type TEXT NOT NULL DEFAULT '',
     review_note TEXT NOT NULL DEFAULT '',
     reviewed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS sources (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS submissions (
@@ -136,6 +142,8 @@ class Store:
         """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(observations)")}
         additions = {
+            "source_id": "TEXT NOT NULL DEFAULT 'full-disclosure'",
+            "canonical_key": "TEXT NOT NULL DEFAULT ''",
             "review_state": "TEXT NOT NULL DEFAULT 'pending'",
             "reviewed_vulnerability_id": "TEXT NOT NULL DEFAULT ''",
             "reviewed_vulnerability_ids_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -149,6 +157,25 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        # Pilot-era/manual databases may contain truncated JSON values. One
+        # malformed row must not make the complete review queue return an empty
+        # connection when JSON1 computes confidence values.
+        for column, fallback in (
+            ("links_json", "[]"), ("extraction_json", "{}"),
+            ("matches_json", "[]"), ("reviewed_vulnerability_ids_json", "[]"),
+        ):
+            self.db.execute(
+                f"UPDATE observations SET {column}=? WHERE NOT json_valid({column})",
+                (fallback,),
+            )
+        self.db.execute("UPDATE observations SET canonical_key=source_url WHERE canonical_key='' ")
+        self.db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS observations_source_key_idx "
+            "ON observations(source_id, canonical_key)"
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO sources(source_id, name) VALUES ('full-disclosure', 'Full Disclosure')"
+        )
         self.db.execute(
             """UPDATE observations SET reviewed_vulnerability_ids_json=json_array(reviewed_vulnerability_id)
             WHERE reviewed_vulnerability_id<>'' AND reviewed_vulnerability_ids_json='[]'"""
@@ -437,6 +464,13 @@ class Store:
         return self.db.execute("SELECT 1 FROM observations WHERE source_url = ?", (source_url,)).fetchone() is not None
 
     def save(self, message: Message, extraction: Extraction, matches: list[Match]) -> None:
+        canonical_key = message.message_id.strip().casefold() or message.source_url
+        existing = self.db.execute(
+            "SELECT source_url FROM observations WHERE source_id=? AND canonical_key=?",
+            (message.source_id, canonical_key),
+        ).fetchone()
+        if existing:
+            message.source_url = str(existing[0])
         canonical_source = message.raw_source or (message.title + "\n" + message.body)
         digest = hashlib.sha256(canonical_source.encode()).hexdigest()
         status = "matched" if matches else "unmatched"
@@ -467,6 +501,14 @@ class Store:
                 status,
             ),
         )
+        self.db.execute(
+            "UPDATE observations SET source_id=?, canonical_key=? WHERE source_url=?",
+            (message.source_id, canonical_key, message.source_url),
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO sources(source_id, name) VALUES (?, ?)",
+            (message.source_id, message.source_id.replace("-", " ").title()),
+        )
         self.db.commit()
 
     def record_submission(self, source_url: str, vulnerability_id: str, sighting_type: str, response: object) -> None:
@@ -478,8 +520,16 @@ class Store:
 
     def _decode(self, row: sqlite3.Row, include_body: bool = False) -> dict[str, object]:
         item = dict(row)
+        fallbacks: dict[str, object] = {
+            "links_json": [], "extraction_json": {}, "matches_json": [],
+            "reviewed_vulnerability_ids_json": [],
+        }
         for key in ("links_json", "extraction_json", "matches_json", "reviewed_vulnerability_ids_json"):
-            item[key.removesuffix("_json")] = json.loads(str(item.pop(key)))
+            encoded = str(item.pop(key))
+            try:
+                item[key.removesuffix("_json")] = json.loads(encoded)
+            except json.JSONDecodeError:
+                item[key.removesuffix("_json")] = fallbacks[key]
         if not include_body:
             item.pop("body", None)
             item.pop("raw_source", None)
@@ -500,6 +550,60 @@ class Store:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY published DESC, source_url DESC"
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
+
+    def observation_page(self, request: ListQuery) -> ListPage:
+        """Return one stable, SQL-paginated observation collection."""
+        tokens = re.findall(r"[^\W_]+", request.search, re.UNICODE)[:12]
+        if request.search and not tokens:
+            return ListPage([], 0, request.page, request.per_page)
+        joins = ""
+        clauses: list[str] = []
+        params: list[object] = []
+        rank = ""
+        if tokens and self.fts_enabled:
+            joins = " JOIN observations_fts ON observations_fts.source_url=o.source_url"
+            clauses.append("observations_fts MATCH ?")
+            params.append(" AND ".join(f'"{token}"*' for token in tokens))
+            rank = ", bm25(observations_fts, 0.0, 5.0, 2.0, 1.0, 3.0) AS search_rank"
+        elif tokens:
+            needle = "%" + " ".join(tokens) + "%"
+            clauses.append("(o.title LIKE ? OR o.author LIKE ? OR o.body LIKE ? OR o.extraction_json LIKE ?)")
+            params.extend((needle, needle, needle, needle))
+        if request.status:
+            clauses.append("o.status = ?")
+            params.append(request.status)
+        if request.review_state:
+            clauses.append("o.review_state = ?")
+            params.append(request.review_state)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        total = int(self.db.execute("SELECT COUNT(*) FROM observations o" + joins + where, params).fetchone()[0])
+        confidence = (
+            "COALESCE((SELECT MAX(CAST(json_extract(value, '$.confidence') AS REAL)) "
+            "FROM json_each(CASE WHEN json_valid(o.matches_json) "
+            "THEN o.matches_json ELSE '[]' END)), 0)"
+        )
+        sort_columns = {
+            "published": "o.published", "title": "o.title COLLATE NOCASE",
+            "author": "o.author COLLATE NOCASE", "status": "o.status",
+            "review": "o.review_state", "confidence": confidence,
+        }
+        direction = request.order.upper()
+        primary = "search_rank ASC, " if tokens and self.fts_enabled and request.sort == "published" else ""
+        order = f" ORDER BY {primary}{sort_columns[request.sort]} {direction}, o.source_url {direction}"
+        select = f"SELECT o.*, {confidence} AS max_confidence{rank} FROM observations o"
+        page_params = [*params, request.per_page, (request.page - 1) * request.per_page]
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(select + joins + where + order + " LIMIT ? OFFSET ?", page_params)
+        return ListPage([self._decode(row) for row in rows], total, request.page, request.per_page)
+
+    def review_counts(self) -> dict[str, int]:
+        counts = {"pending": 0, "approved": 0, "rejected": 0}
+        for state, count in self.db.execute(
+            "SELECT review_state, COUNT(*) FROM observations GROUP BY review_state"
+        ):
+            if state in counts:
+                counts[str(state)] = int(count)
+        return counts
 
     def search_rows(
         self, query: str, status: str | None = None, review_state: str | None = None,
@@ -557,6 +661,14 @@ class Store:
     def get(self, source_url: str) -> dict[str, object] | None:
         self.db.row_factory = sqlite3.Row
         row = self.db.execute("SELECT * FROM observations WHERE source_url = ?", (source_url,)).fetchone()
+        return self._decode(row, include_body=True) if row else None
+
+    def get_by_content_hash(self, content_hash: str) -> dict[str, object] | None:
+        self.db.row_factory = sqlite3.Row
+        row = self.db.execute(
+            "SELECT * FROM observations WHERE content_hash=? ORDER BY source_url LIMIT 1",
+            (content_hash,),
+        ).fetchone()
         return self._decode(row, include_body=True) if row else None
 
     def review(
