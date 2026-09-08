@@ -15,6 +15,7 @@ class Message:
     raw_source: str = ""
     source_format: str = "text/html"
     message_id: str = ""
+    source_id: str = "full-disclosure"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

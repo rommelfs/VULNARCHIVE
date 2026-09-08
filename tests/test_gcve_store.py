@@ -93,6 +93,29 @@ class GCVEStoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_startup_recovers_published_ledger_record_for_public_detail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "repair.sqlite"
+            source = "https://example.test/advisory"
+            identifier = "GCVE-1988-2026-0173"
+            item = record(identifier, "2026-09-08T08:30:00Z")
+            store = Store(path)
+            store.save_publication(
+                source, "gcve:advisory", "gcve", gcve_id=identifier,
+                status="published", payload=item,
+            )
+            store.db.execute("DELETE FROM gcve_records WHERE vuln_id=?", (identifier,))
+            store.db.commit()
+            self.assertEqual(store.published_gcve_for_source(source), "")
+            store.close()
+
+            repaired = Store(path)
+            try:
+                self.assertEqual(repaired.gcve_record(identifier), item)
+                self.assertEqual(repaired.published_gcve_for_source(source), identifier)
+            finally:
+                repaired.close()
+
 
 if __name__ == "__main__":
     unittest.main()
