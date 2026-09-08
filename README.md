@@ -14,6 +14,7 @@ The GCVE Best Current Practices supplied with this repository are indexed in
 
 - Historical import by archive month or period
 - Continuous import from the official RSS feed
+- Repeatable source selection for Full Disclosure and Bugtraq
 - SQLite checkpoints and idempotent re-runs
 - Original source retention with SHA-256, format, and Message-ID when available
 - CVE, GCVE, GHSA, CWE, and CVSS extraction
@@ -23,7 +24,7 @@ The GCVE Best Current Practices supplied with this repository are indexed in
 - Conservative product/title candidate matching for ID-less posts
 - Auditable candidate evidence and contradiction-aware CWE/version comparison
 - JSON Lines review export
-- Local analyst review interface with filters, detail view, approval, rejection, match override, and notes
+- Local analyst review interface with filters, server-side pagination and sorting, detail view, approval, rejection, match override, and notes
 - SQLite FTS5 full-text search across titles, authors, post bodies, CVE/CWE metadata
 - Explicit, single-observation Sighting submission
 - Dry-run or explicit batch submission of approved observations
@@ -82,6 +83,48 @@ Process the current feed. Repeated runs skip URLs already stored:
 fd-sightings rss
 ```
 
+Import both configured Seclists sources. `--source` is repeatable for `rss`,
+`sync`, and `archive`; omitting it keeps the Full Disclosure default:
+
+```sh
+fd-sightings rss --source full-disclosure --source bugtraq
+fd-sightings archive --source bugtraq --from-period 2020-01 --to-period 2020-12
+```
+
+Source adapters own discovery and parsing. Observations retain a stable source
+identifier and use Message-ID as their per-source canonical key when available,
+so a second mirror URL does not create a duplicate observation.
+
+For the unattended sync service, configure the enabled sources in
+`/etc/vulnarchive/vulnarchive.env` (the template is
+`config/vulnarchive.env.example`):
+
+```env
+VA_SOURCES=full-disclosure,bugtraq
+```
+
+**Important:** Bugtraq is an archive-only source. It has no current RSS feed,
+so enabling it does not make a regular `sync` run discover historical posts.
+Backfill it explicitly, for example:
+
+```sh
+fd-sightings archive --source bugtraq --from-period 2019-01 --to-period 2020-12
+```
+
+The same backfill can be queued in **Review → Archive imports** by selecting
+Bugtraq and the required historical month range. A zero-item current `sync` for
+Bugtraq is expected and is reported as an archive-only source, not as a
+successful historical import.
+
+The authenticated review UI exposes the same selection under **Archive
+imports**. Its Full Disclosure and Bugtraq checkboxes default to `VA_SOURCES`
+and are recorded with each worker job. The page also displays the unattended
+configuration currently loaded by the review service. It intentionally cannot
+edit `/etc/vulnarchive/vulnarchive.env` or run `systemctl`: that file is
+root-owned and service control remains an operator action. The upgrade script
+validates `VA_SOURCES`, warns when it is missing, and applies environment changes
+when it restarts services that were active before the upgrade.
+
 For the continuous Phase-2 operation, import the current feed and immediately apply the automatic publication policy in one idempotent run:
 
 ```sh
@@ -109,7 +152,16 @@ fd-sightings review
 In production, set `VA_REVIEW_BIND=10.205.22.135` and expose it through the authenticated reverse-proxy path at `https://vuln.freearchive.org/review/`. The CLI still
 defaults to localhost when it is started outside the supplied systemd unit. The
 interface supports queue filters, source evidence, match overrides, approval,
-rejection, and review notes.
+rejection, review notes, and bounded bulk review. Filter the queue with the
+minimum/maximum confidence sliders, select individual rows, or use **Approve all shown** to
+approve the current page (up to 100 observations per request). Bulk approval
+retains all candidate IDs for each row and uses its proposed Sighting type;
+publication remains a separate action.
+
+Every manual or bulk decision is also written to an append-only review history.
+The observation detail page shows the decision time, authenticated reviewer,
+state, selected vulnerability IDs, Sighting type, and note. The fields on the
+observation remain the current-state projection used by queue queries.
 
 The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
@@ -117,6 +169,8 @@ After approval, the observation links directly to the publication action. Once
 published, that action is replaced by a link to the public record at
 `/vulnerability/<GCVE-ID>`. The review queue and public archive both use the
 SQLite full-text index for product, identifier, author, title, and body searches.
+Review results are paginated in SQL and can be sorted by observation title,
+confidence, or review state; filters and sort order are retained while paging.
 
 Authenticated operators can also open **Archive imports** in the review interface
 to queue historical month ranges. These background jobs run sequentially, retain
