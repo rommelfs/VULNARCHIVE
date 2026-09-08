@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .sources import SOURCES, configured_source_ids
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -18,8 +20,8 @@ def _now() -> str:
 
 def _month_number(period: str) -> int:
     year, month = (int(part) for part in period.split("-", 1))
-    if year < 2002 or not 1 <= month <= 12:
-        raise ValueError("period must be between 2002-01 and the supported calendar range")
+    if year < 1993 or not 1 <= month <= 12:
+        raise ValueError("period must be between 1993-01 and the supported calendar range")
     return year * 12 + month
 
 
@@ -58,7 +60,7 @@ class ImportWorkerManager:
 
     def submit(
         self, start: str, end: str, *, limit: int = 0,
-        semantic: bool = False, refresh: bool = False,
+        semantic: bool = False, refresh: bool = False, sources: list[str] | None = None,
     ) -> dict[str, Any]:
         first = _month_number(start)
         last = _month_number(end)
@@ -71,6 +73,11 @@ class ImportWorkerManager:
             raise ValueError("one worker may import at most 120 months")
         if limit < 0 or limit > 10_000:
             raise ValueError("per-month limit must be between 0 and 10000")
+        source_ids = list(dict.fromkeys(sources if sources is not None else configured_source_ids()))
+        if not source_ids:
+            raise ValueError("select at least one source")
+        if any(source_id not in SOURCES for source_id in source_ids):
+            raise ValueError("unsupported source selection")
         job_id = uuid.uuid4().hex
         job: dict[str, Any] = {
             "id": job_id,
@@ -80,6 +87,7 @@ class ImportWorkerManager:
             "limit": limit,
             "semantic": semantic,
             "refresh": refresh,
+            "sources": source_ids,
             "created_at": _now(),
             "started_at": "",
             "finished_at": "",
@@ -108,6 +116,8 @@ class ImportWorkerManager:
         if job.get("refresh"):
             command.append("--refresh")
         command.extend(["archive", "--from-period", job["from_period"], "--to-period", job["to_period"]])
+        for source_id in job.get("sources") or ["full-disclosure"]:
+            command.extend(["--source", source_id])
         if job["limit"]:
             command.extend(["--limit", str(job["limit"])])
         environment = os.environ.copy()
