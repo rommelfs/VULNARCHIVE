@@ -65,6 +65,18 @@ deploying this route for the first time, install the updated
 Apache. The application upgrade script deliberately does not overwrite an
 operator-managed Apache virtual host.
 
+The repository includes a guarded installer for this operator-managed step. It
+backs up an existing virtual host, restores it if `apachectl configtest` fails,
+and reloads Apache only after successful validation:
+
+```sh
+sudo /opt/vulnarchive/deploy/install-apache-config.sh
+```
+
+Override `VULNARCHIVE_APACHE_SITE` when the enabled virtual-host file has a
+different name. An Apache-generated HTML 404 (rather than the application's JSON
+404) for `/vulnerability/...` means this route template has not been installed.
+
 ## Publication and operation
 
 Before enabling periodic publication, verify the local policy and run:
