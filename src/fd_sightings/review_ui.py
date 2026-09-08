@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .store import Store
+from .query import ListQuery
 from .workers import ImportWorkerManager
+from .sources import SOURCES, configured_source_ids
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
 
@@ -208,6 +210,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 limit=limit,
                 semantic=data.get("semantic", [""])[0] == "1",
                 refresh=data.get("refresh", [""])[0] == "1",
+                sources=data.get("source", []),
             )
         except (ValueError, OSError) as exc:
             self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
@@ -235,6 +238,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
         previous_year = now.year if now.month > 1 else now.year - 1
         previous_month_number = now.month - 1 if now.month > 1 else 12
         previous_month = f"{previous_year:04d}-{previous_month_number:02d}"
+        enabled_sources = set(configured_source_ids())
+        source_controls = "".join(
+            f'<label><input type="checkbox" name="source" value="{_e(source_id)}" '
+            f'{"checked" if source_id in enabled_sources else ""}> {_e(adapter.name)}</label>'
+            for source_id, adapter in SOURCES.items()
+        )
         content = f'''<div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
@@ -242,6 +251,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
 <label>To month <input type="month" name="to_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="Last archive month"></label>
 <label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
+{source_controls}
 <label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
 <label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>
 <div class="panel"><h2>Workers</h2><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
@@ -319,28 +329,48 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._send(_layout("Publication completed", f'<div class="panel"><h1>Publication run completed</h1><p>Processed {_e(len(outcomes))} archived observations.</p><p><a href="/publish">Back to publication dashboard</a></p><pre>{rendered}</pre></div>'))
 
     def _index(self, params: dict[str, list[str]]) -> None:
-        review = params.get("review", [""])[0]
-        match_status = params.get("match", [""])[0]
-        query = params.get("q", [""])[0].casefold()
-        rows = (self.server.store.search_rows(query, match_status or None, review or None)
-                if query else self.server.store.rows(match_status or None, review or None))
-        counts = {state: len(self.server.store.rows(review_state=state)) for state in ("pending", "approved", "rejected")}
+        try:
+            one = lambda name, default="": params.get(name, [default])[0]
+            request = ListQuery(
+                page=int(one("page", "1")), per_page=int(one("per_page", "50")),
+                sort=one("sort", "published"), order=one("order", "desc"),
+                search=one("q").strip(), status=one("match"), review_state=one("review"),
+            )
+        except (ValueError, TypeError) as exc:
+            self._send(_layout("Invalid review query", f'<div class="panel"><h1>Invalid review query</h1><p>{_e(exc)}</p></div>'), 400)
+            return
+        result = self.server.store.observation_page(request)
+        rows = result.items
+        counts = self.server.store.review_counts()
         table_rows = []
         for row in rows:
             extraction = row["extraction"]
             matches = row["matches"]
             tags = " ".join(f'<span class="tag">{_e(value)}</span>' for value in extraction.get("cve_ids", []) + extraction.get("cwe_ids", []))
             proposed = extraction.get("proposed_type", "seen")
-            confidence = max((float(match["confidence"]) for match in matches), default=0)
+            confidence = float(row["max_confidence"])
             href = "/observation?" + urllib.parse.urlencode({"source": row["source_url"]})
             table_rows.append(f"""<tr><td><a href="{_e(href)}"><strong>{_e(row['title'])}</strong></a><br><span class="muted">{_e(row['author'])} · {_e(row['published'])}</span><br>{tags}</td>
 <td>{_e(proposed)}</td><td>{confidence:.3f}</td><td class="{_e(row['review_state'])}">{_e(row['review_state'])}</td></tr>""")
+        def sort_link(field: str, label: str) -> str:
+            order = "asc" if request.sort != field or request.order == "desc" else "desc"
+            query = {"q": request.search, "review": request.review_state, "match": request.status,
+                     "per_page": request.per_page, "sort": field, "order": order}
+            return f'<a href="/?{_e(urllib.parse.urlencode(query))}">{_e(label)}</a>'
+        common = {"q": request.search, "review": request.review_state, "match": request.status,
+                  "per_page": request.per_page, "sort": request.sort, "order": request.order}
+        pagination = []
+        if request.page > 1:
+            pagination.append(f'<a rel="prev" href="/?{_e(urllib.parse.urlencode({**common, "page": request.page - 1}))}">Previous</a>')
+        pagination.append(f'<span>Page {request.page} of {result.pages} · {result.total} observations</span>')
+        if request.page < result.pages:
+            pagination.append(f'<a rel="next" href="/?{_e(urllib.parse.urlencode({**common, "page": request.page + 1}))}">Next</a>')
         content = f"""<div class="panel"><h1>Review queue</h1><div class="toolbar">
 <span>Pending <strong>{counts['pending']}</strong></span><span>Approved <strong>{counts['approved']}</strong></span><span>Rejected <strong>{counts['rejected']}</strong></span></div>
-<form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(params.get('q',[''])[0])}" placeholder="Search title, author, body, CVE or CWE">
-<select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), review)}</select>
-<select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), match_status)}</select><button>Filter</button></form></div>
-<div class="panel"><table><thead><tr><th>Observation</th><th>Proposal</th><th>Confidence</th><th>Review</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="4">No observations.</td></tr>'}</tbody></table></div>"""
+<form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(request.search)}" placeholder="Search title, author, body, CVE or CWE">
+<select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), request.review_state)}</select>
+<select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), request.status)}</select><input type="hidden" name="sort" value="{_e(request.sort)}"><input type="hidden" name="order" value="{_e(request.order)}"><button>Filter</button></form></div>
+<div class="panel"><table><thead><tr><th>{sort_link('title', 'Observation')}</th><th>Proposal</th><th>{sort_link('confidence', 'Confidence')}</th><th>{sort_link('review', 'Review')}</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="4">No observations.</td></tr>'}</tbody></table><nav class="toolbar" aria-label="Pagination">{' '.join(pagination)}</nav></div>"""
         self._send(_layout("Review queue", content))
 
     @staticmethod
@@ -371,7 +401,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         evidence = "".join(f"<li>{_e(item)}</li>" for item in extraction.get("poc_evidence", []))
         content = f"""<p><a href="/">← Queue</a></p><div class="grid"><section>
 <div class="panel"><h1>{_e(row['title'])}</h1><p class="muted">{_e(row['author'])} · {_e(row['published'])}</p>
-<p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open Full Disclosure source</a></p>
+<p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open original source</a> · {_e(row.get('source_id', 'full-disclosure'))}</p>
 <h3>Extraction</h3><p>Product: <strong>{_e(extraction.get('product_hint',''))}</strong> · Proposed type: <strong>{_e(extraction.get('proposed_type',''))}</strong> · PoC score: <strong>{_e(extraction.get('poc_score',0))}</strong></p><ul>{evidence or '<li>No PoC indicators</li>'}</ul>
 <h3>Candidate analysis</h3><ul>{match_analysis or '<li>No candidates</li>'}</ul>
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
