@@ -57,9 +57,12 @@ class ReviewUITest(unittest.TestCase):
     def test_review_ui_has_no_external_connection_endpoint(self) -> None:
         with urllib.request.urlopen(self.request("/")) as response:
             body = response.read().decode()
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(response.headers["X-VULNARCHIVE-View"], "review")
         self.assertNotIn("Vulnerability-Lookup", body)
         self.assertNotIn("Connection settings", body)
         self.assertIn('href="/review/publish"', body)
+        self.assertIn('<main id="content" style="display:block;visibility:visible;opacity:1">', body)
         with self.assertRaises(urllib.error.HTTPError) as raised:
             urllib.request.urlopen(self.request("/connection"))
         self.assertEqual(raised.exception.code, 404)

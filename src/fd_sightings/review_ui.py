@@ -28,7 +28,7 @@ def _layout(title: str, content: str, *, refresh: int = 0) -> bytes:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 {refresh_meta}<title>{_e(title)} · VULNARCHIVE</title><style>
 :root{{--bg:#f5f3ee;--panel:#fff;--ink:#1d242c;--muted:#65707b;--line:#d8d4ca;--accent:#315e52;--warn:#9d6114;--bad:#983b3b}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}}
+*{{box-sizing:border-box}}html,body{{min-height:100%;visibility:visible!important;opacity:1!important}}body{{display:block!important;margin:0;background:#f5f3ee;background:var(--bg);color:#1d242c;color:var(--ink);font:15px/1.5 system-ui,sans-serif}}
 header{{background:#18332d;color:white;padding:18px 28px}}header a{{color:white;text-decoration:none}}main{{max-width:1180px;margin:24px auto;padding:0 20px}}
 .panel{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:18px}}
 .toolbar{{display:flex;gap:10px;flex-wrap:wrap;align-items:center}}select,input,textarea,button{{font:inherit;padding:9px;border:1px solid #aaa;border-radius:6px;background:white}}
@@ -39,7 +39,7 @@ th{{color:var(--muted);font-size:12px;text-transform:uppercase}}.tag{{display:in
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px;border-radius:7px;max-height:520px;overflow:auto}}
 .grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}label{{display:block;font-weight:600;margin:12px 0 5px}}textarea{{width:100%;min-height:90px}}
 @media(max-width:800px){{.grid{{grid-template-columns:1fr}}table{{display:block;overflow:auto}}}}
-</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main>{content}</main></body></html>"""
+</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main id="content" style="display:block;visibility:visible;opacity:1">{content}</main></body></html>"""
     return page.encode("utf-8")
 
 
@@ -80,6 +80,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-VULNARCHIVE-View", "review")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
