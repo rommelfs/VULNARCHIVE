@@ -84,6 +84,10 @@ class PublicUITest(unittest.TestCase):
         self.assertIn("Page 1 of 3 · 5 posts", page)
         self.assertIn('rel="next"', page)
         self.assertLess(page.index("Archive post 1"), page.index("Archive post 2"))
+        first = next(row for row in self.store.rows() if row["title"] == "Archive post 1")
+        self.assertIn(f'/archive/item/{first["content_hash"]}', page)
+        _, detail, _ = self.get(f'/archive/item/{first["content_hash"]}')
+        self.assertIn("Archive post 1", detail.decode())
 
         _, second_body, _ = self.get("/archive/?per_page=2&page=2")
         second = second_body.decode()
@@ -114,12 +118,21 @@ class PublicUITest(unittest.TestCase):
         record = {
             "dataType": "CVE_RECORD", "dataVersion": "5.2",
             "cveMetadata": {"vulnId": "GCVE-1988-2026-0042", "state": "PUBLISHED"},
-            "containers": {"cna": {"title": "Public Widget record"}},
+            "containers": {"cna": {
+                "title": "Public Widget record",
+                "descriptions": [{"lang": "en", "value": "First line\nSecond line"}],
+                "references": [{"url": "https://example.test/advisory"}],
+            }},
         }
         self.store.save_publication("record-source", "gcve:record", "gcve", gcve_id="GCVE-1988-2026-0042", status="published", payload=record)
         _, record_body, content_type = self.get("/vulnerability/GCVE-1988-2026-0042")
         self.assertEqual(content_type, "text/html")
-        self.assertIn("GCVE-1988-2026-0042", record_body.decode())
+        page = record_body.decode()
+        self.assertIn("GCVE-1988-2026-0042", page)
+        self.assertIn("<pre>First line\nSecond line</pre>", page)
+        self.assertIn('href="https://example.test/advisory"', page)
+        self.assertIn("<summary>Raw JSON</summary>", page)
+        self.assertIn(r"First line\nSecond line", page)
 
     def test_admin_and_write_routes_are_unavailable(self) -> None:
         for path in ("/review", "/connection", "/publish", "/observation"):
