@@ -84,6 +84,10 @@ class PublicUITest(unittest.TestCase):
         self.assertIn("Page 1 of 3 · 5 posts", page)
         self.assertIn('rel="next"', page)
         self.assertLess(page.index("Archive post 1"), page.index("Archive post 2"))
+        first = next(row for row in self.store.rows() if row["title"] == "Archive post 1")
+        self.assertIn(f'/archive/item/{first["content_hash"]}', page)
+        _, detail, _ = self.get(f'/archive/item/{first["content_hash"]}')
+        self.assertIn("Archive post 1", detail.decode())
 
         _, second_body, _ = self.get("/archive/?per_page=2&page=2")
         second = second_body.decode()
