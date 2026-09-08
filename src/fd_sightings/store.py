@@ -157,6 +157,17 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        # Pilot-era/manual databases may contain truncated JSON values. One
+        # malformed row must not make the complete review queue return an empty
+        # connection when JSON1 computes confidence values.
+        for column, fallback in (
+            ("links_json", "[]"), ("extraction_json", "{}"),
+            ("matches_json", "[]"), ("reviewed_vulnerability_ids_json", "[]"),
+        ):
+            self.db.execute(
+                f"UPDATE observations SET {column}=? WHERE NOT json_valid({column})",
+                (fallback,),
+            )
         self.db.execute("UPDATE observations SET canonical_key=source_url WHERE canonical_key='' ")
         self.db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS observations_source_key_idx "
@@ -509,8 +520,16 @@ class Store:
 
     def _decode(self, row: sqlite3.Row, include_body: bool = False) -> dict[str, object]:
         item = dict(row)
+        fallbacks: dict[str, object] = {
+            "links_json": [], "extraction_json": {}, "matches_json": [],
+            "reviewed_vulnerability_ids_json": [],
+        }
         for key in ("links_json", "extraction_json", "matches_json", "reviewed_vulnerability_ids_json"):
-            item[key.removesuffix("_json")] = json.loads(str(item.pop(key)))
+            encoded = str(item.pop(key))
+            try:
+                item[key.removesuffix("_json")] = json.loads(encoded)
+            except json.JSONDecodeError:
+                item[key.removesuffix("_json")] = fallbacks[key]
         if not include_body:
             item.pop("body", None)
             item.pop("raw_source", None)
@@ -560,7 +579,8 @@ class Store:
         total = int(self.db.execute("SELECT COUNT(*) FROM observations o" + joins + where, params).fetchone()[0])
         confidence = (
             "COALESCE((SELECT MAX(CAST(json_extract(value, '$.confidence') AS REAL)) "
-            "FROM json_each(o.matches_json)), 0)"
+            "FROM json_each(CASE WHEN json_valid(o.matches_json) "
+            "THEN o.matches_json ELSE '[]' END)), 0)"
         )
         sort_columns = {
             "published": "o.published", "title": "o.title COLLATE NOCASE",

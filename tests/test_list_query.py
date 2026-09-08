@@ -39,3 +39,29 @@ class ListQueryTest(unittest.TestCase):
                 self.assertEqual([row["title"] for row in searched.items], ["Widget 2"])
             finally:
                 store.close()
+
+    def test_malformed_legacy_json_cannot_blank_the_review_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.sqlite"
+            store = Store(path)
+            store.save(Message("https://example.test/broken", "Recoverable"), Extraction(), [])
+            store.db.execute(
+                "UPDATE observations SET matches_json='', extraction_json='truncated'"
+            )
+            store.db.commit()
+            # Runtime reads are defensive even before a process restart.
+            page = store.observation_page(ListQuery(sort="confidence"))
+            self.assertEqual(page.items[0]["title"], "Recoverable")
+            self.assertEqual(page.items[0]["matches"], [])
+            self.assertEqual(page.items[0]["extraction"], {})
+            store.close()
+
+            # Startup migration repairs the persisted values for future reads.
+            reopened = Store(path)
+            try:
+                values = reopened.db.execute(
+                    "SELECT matches_json, extraction_json FROM observations"
+                ).fetchone()
+                self.assertEqual(tuple(values), ("[]", "{}"))
+            finally:
+                reopened.close()
