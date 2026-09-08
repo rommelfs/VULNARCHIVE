@@ -1,6 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
-UPGRADE_SCRIPT_VERSION=3
+UPGRADE_SCRIPT_VERSION=4
 
 # Complete in-place production upgrade for the deployment documented in
 # DEPLOYMENT.md. Override paths through the environment for staging installs.
@@ -138,6 +138,14 @@ else:
         print("NOTE: Bugtraq has no current RSS feed; queue an historical archive import.")
 PY
 
+# Resolve only the bind value needed for the readiness probe. Do not source the
+# operator file or expose review credentials on the process command line.
+review_bind=$(sed -n 's/^[[:space:]]*VA_REVIEW_BIND[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)
+review_bind=${review_bind%%[[:space:]#]*}
+review_bind=${review_bind#\"}
+review_bind=${review_bind%\"}
+review_bind=${review_bind:-127.0.0.1}
+
 web_was_active=0
 review_was_active=0
 timer_was_active=0
@@ -213,6 +221,29 @@ echo "==> Restarting previously active services"
 (( review_was_active )) && systemctl start vulnarchive-review.service || true
 (( timer_was_active )) && systemctl start vulnarchive-sync.timer || true
 echo "==> Service restart applied environment changes from $ENV_FILE"
+
+if (( review_was_active )); then
+    echo "==> Checking private review service at $review_bind:8765"
+    review_ready=0
+    status=none
+    for attempt in {1..20}; do
+        # 401/403 proves that the HTTP backend is reachable without putting
+        # review credentials on the curl command line.
+        status=$(curl --silent --output /dev/null --max-time 2 --write-out '%{http_code}' \
+            "http://$review_bind:8765/" || true)
+        if [[ $status == 200 || $status == 401 || $status == 403 ]]; then
+            review_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if (( ! review_ready )); then
+        echo "error: private review service is not reachable (last HTTP status: $status)" >&2
+        systemctl --no-pager --full status vulnarchive-review.service >&2 || true
+        journalctl --no-pager -u vulnarchive-review.service -n 50 >&2 || true
+        exit 1
+    fi
+fi
 
 if (( web_was_active )); then
     echo "==> Checking local public service"
