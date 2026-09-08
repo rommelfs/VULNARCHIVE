@@ -1,6 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
-UPGRADE_SCRIPT_VERSION=2
+UPGRADE_SCRIPT_VERSION=4
 
 # Complete in-place production upgrade for the deployment documented in
 # DEPLOYMENT.md. Override paths through the environment for staging installs.
@@ -103,6 +103,49 @@ echo "==> Running pre-deployment tests"
 PYTHONPATH="$APP_DIR/src" "$VENV_DIR/bin/python" -m unittest discover -s tests -v
 "$VENV_DIR/bin/python" -m compileall -q src
 
+# Validate the operator-owned source setting without sourcing the file as shell
+# code. Missing VA_SOURCES remains backwards compatible, but the operator gets
+# an actionable reminder instead of silently overlooking Bugtraq.
+echo "==> Checking configured import sources"
+ENV_FILE="$ENV_FILE" PYTHONPATH="$APP_DIR/src" "$VENV_DIR/bin/python" - <<'PY'
+import os
+import shlex
+from pathlib import Path
+
+from fd_sightings.sources import configured_source_ids
+
+path = Path(os.environ["ENV_FILE"])
+configured = None
+for raw_line in path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    name, value = line.split("=", 1)
+    if name.strip() == "VA_SOURCES":
+        words = shlex.split(value, comments=True)
+        configured = words[0] if len(words) == 1 else value.strip()
+try:
+    sources = configured_source_ids(configured) if configured is not None else ["full-disclosure"]
+except ValueError as exc:
+    raise SystemExit(f"error: invalid VA_SOURCES in {path}: {exc}")
+if configured is None:
+    print(f"WARNING: VA_SOURCES is absent in {path}; only full-disclosure is enabled.")
+    print("Add VA_SOURCES=full-disclosure,bugtraq to configure both sources; Bugtraq requires a historical archive import.")
+    print("Bugtraq is archive-only and requires an historical import worker.")
+else:
+    print("Configured sources: " + ", ".join(sources))
+    if "bugtraq" in sources:
+        print("NOTE: Bugtraq has no current RSS feed; queue an historical archive import.")
+PY
+
+# Resolve only the bind value needed for the readiness probe. Do not source the
+# operator file or expose review credentials on the process command line.
+review_bind=$(sed -n 's/^[[:space:]]*VA_REVIEW_BIND[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)
+review_bind=${review_bind%%[[:space:]#]*}
+review_bind=${review_bind#\"}
+review_bind=${review_bind%\"}
+review_bind=${review_bind:-127.0.0.1}
+
 web_was_active=0
 review_was_active=0
 timer_was_active=0
@@ -177,6 +220,30 @@ echo "==> Restarting previously active services"
 (( web_was_active )) && systemctl start vulnarchive-web.service || true
 (( review_was_active )) && systemctl start vulnarchive-review.service || true
 (( timer_was_active )) && systemctl start vulnarchive-sync.timer || true
+echo "==> Service restart applied environment changes from $ENV_FILE"
+
+if (( review_was_active )); then
+    echo "==> Checking private review service at $review_bind:8765"
+    review_ready=0
+    status=none
+    for attempt in {1..20}; do
+        # 401/403 proves that the HTTP backend is reachable without putting
+        # review credentials on the curl command line.
+        status=$(curl --silent --output /dev/null --max-time 2 --write-out '%{http_code}' \
+            "http://$review_bind:8765/" || true)
+        if [[ $status == 200 || $status == 401 || $status == 403 ]]; then
+            review_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if (( ! review_ready )); then
+        echo "error: private review service is not reachable (last HTTP status: $status)" >&2
+        systemctl --no-pager --full status vulnarchive-review.service >&2 || true
+        journalctl --no-pager -u vulnarchive-review.service -n 50 >&2 || true
+        exit 1
+    fi
+fi
 
 if (( web_was_active )); then
     echo "==> Checking local public service"
