@@ -1,307 +1,177 @@
-# Implementierungsreview und konfliktarmer Ausbauplan
+# Implementation review and completion plan
 
-Stand der Prüfung: 8. September 2026. Bewertet wurden Implementierung, Tests und
-Betriebsdokumentation im Repository. Die Statusangaben bedeuten:
+**Reviewed:** 2026-09-08
+**Scope:** the eight requested end-product capabilities plus operational quality
+**Meaning of status:** repository implementation, not production-host state
 
-- **Erfüllt**: der geforderte Kern ist implementiert und automatisiert getestet.
-- **Teilweise**: ein nutzbarer Teil ist vorhanden, der Anspruch für das Endprodukt
-  wird aber noch nicht vollständig erreicht.
-- **Offen**: es gibt noch keine tragfähige Implementierung des geforderten Kerns.
+## Executive summary
 
-## Kurzfazit
+The core ingestion, provenance, matching, review, audit, and GNA 1988 publication pipeline is implemented. The largest remaining product gap is a configurable website/content system. Collection behavior is scalable for the primary review and archive pages, but pagination and grouping are not yet uniform across every audit and administration view. Matching evaluation exists, but its labelled corpus must expand before broad automatic use.
 
-| Nr. | Anforderung | Status | Wesentliche Lücke |
+| # | Requirement | Status | Main remaining work |
 |---:|---|---|---|
-| 1 | Mehrere Quellen | **Teilweise** | Full Disclosure und Bugtraq sind auswählbar; weitere Adapter und quellenübergreifende Provenienz bleiben offen. |
-| 2 | Automatische Publikation als GNA 1988 | **Erfüllt** | Vor Produktion bleiben Policy-Abnahme und Ende-zu-Ende-Abnahmetest erforderlich. |
-| 3 | CVE-Abgleich und LLM-Aufwertung | **Teilweise** | Pipeline existiert, aber Extraktion, Retrieval, Audit-Trail und Evaluation sind noch zu schmal. |
-| 4 | Manuelles Approval bei Mehrdeutigkeit | **Teilweise** | Fachlicher Workflow existiert; Queue-Betrieb, Historie und Zustandsmodell müssen gehärtet werden. |
-| 5 | Gestaltbare Website | **Offen** | Inhalte, Navigation und CSS sind fest im Python-Code eingebettet; CMS-/Theme-/Asset-Konzept fehlt. |
-| 6 | Sortierbare Tabellen | **Teilweise** | Die Publikations-API sortiert Datumsfelder; UI-Tabellen und `confidence` sind nicht sortierbar. |
-| 7 | Gruppierung und Pagination überall | **Teilweise** | Öffentliches Archiv und API können paginieren; Review-, Publish- und Worker-Tabellen nicht. |
-| 8 | Fulltext-Index | **Teilweise** | FTS5 für Beobachtungen ist vorhanden; Abdeckung, zwingende Verfügbarkeit und DB-seitige Pagination fehlen. |
+| 1 | Multiple sources | Foundation complete | Adapter onboarding contract, more real sources, source health UI |
+| 2 | Automatic GNA 1988 publication | Complete with policy controls | Production acceptance, monitoring, failure drills |
+| 3 | Compare/enrich/link known CVEs, including LLM | Complete with safeguards | Larger labelled corpus, drift reports, operator metrics |
+| 4 | Manual approval when ambiguous | Complete | SSO/MFA only if required; improve assignment/queues |
+| 5 | Website design/content options | Partial | Theme/content model, logo, pages, navigation, admin editor |
+| 6 | Sort tables by fields such as confidence | Main queue complete | Shared sortable collection component for remaining lists |
+| 7 | Grouping and pagination everywhere | Partial | Audit/admin pagination, cursor strategy where needed |
+| 8 | Full-text index | Complete with fallback | FTS health/rebuild tooling and relevance tuning |
 
-## Detailprüfung
+## 1. Multiple sources
 
-### 1. Mehrere Quellen — teilweise
+### Implemented
 
-Ein Source-Adapter-Vertrag und eine Registry für Full Disclosure und Bugtraq sind
-inzwischen vorhanden. RSS-, Sync- und Monatsimport akzeptieren wiederholbare
-`--source`-Optionen. Beobachtungen speichern `source_id` und einen kanonischen,
-pro Quelle eindeutigen Schlüssel; Message-ID verhindert Duplikate desselben
-Beitrags unter einer zweiten URL. Generische, hashbasierte Archivdetailseiten
-entfernen die frühere Full-Disclosure-Annahme aus öffentlichen Links.
+- A source-adapter registry isolates source identity, feed/month discovery, and parsing.
+- Full Disclosure and Bugtraq are registered.
+- Source selection is repeatable on the CLI and configurable through `VA_SOURCES`.
+- Source ID and canonical key are persisted; deduplication is source-aware.
+- Historical workers accept source selections and date ranges.
 
-Noch fehlen Adapter für Archive außerhalb des gemeinsamen Seclists-HTML-Formats,
-quellenübergreifende Provenienz für denselben Beitrag, Checkpoints pro Quelle und
-Source-Filter/Gruppierung in allen Collections. Bestehende Daten werden
-rückwärtskompatibel auf `source_id='full-disclosure'` migriert.
+### Gap and completion work
 
-### 2. Automatische Publikation als GNA 1988 — erfüllt
+Bugtraq is archive-only, and enabling it does not backfill history. There is no web page showing source health, last successful import, coverage, or parser error rate.
 
-`sync` verbindet Import und Policy-gesteuerte automatische Publikation. Die
-Implementierung reserviert `GCVE-1988-<Jahr>-<Sequenz>` transaktional in SQLite,
-führt ein dauerhaftes Publikations-Ledger und erzeugt BCP-05-Datensätze. Bereits
-publizierte Operationen werden idempotent übersprungen; fehlgeschlagene werden
-nur explizit erneut versucht. BCP-03-API und NDJSON-Dump lesen denselben
-kanonischen lokalen Datensatz.
+1. Formalize adapter contract tests with feed/month/message fixtures.
+2. Add source status: capability, last run/success, counts, and latest message date.
+3. Expose source status and safe default selection to administrators.
+4. Add parser-change regression fixtures per source.
 
-Wichtig ist die fachliche Grenze: „automatisch“ bedeutet nicht, dass jeder
-importierte Text publiziert wird. Policy, Relevanz, Evidenzscore, Match-Schwellen
-und Mehrdeutigkeit bestimmen `archive-only`, `review-required`, Sighting,
-Kontextdatensatz oder neues Advisory. Das entspricht dem dokumentierten
-Vorsichtsprinzip. Vor Produktivfreigabe müssen die dauerhafte GNA-UUID, Backup/
-Restore, Parallelitätsverhalten und BCP-03/BCP-05-Abnahme gegen eine realistische
-Datenbank geprüft werden.
+## 2. Automatic GNA 1988 publication
 
-### 3. CVE-Abgleich, LLM und Aufwertung — teilweise
+### Implemented
 
-Vorhanden sind:
+- Environment-driven publication policy and a plan-only command.
+- Known-ID context records and new GNA 1988 allocations.
+- Stable provider identity, year allocation, retry, canonical records, publication ledger, public API, dump, and vulnerability pages.
+- Startup recovery of missing canonical projections from published ledger rows.
 
-1. statische Extraktion von CVE, GCVE, GHSA, CWE, CVSS, Versionen,
-   Schwachstellenklassen und PoC-Indikatoren;
-2. exakte Auflösung expliziter IDs über Vulnerability-Lookup;
-3. begrenztes Kandidaten-Retrieval nach Produkt sowie deterministisches Scoring
-   von Titel-, Produkt-, CWE- und Versionssignalen;
-4. optionaler LLM-Vergleich von höchstens zehn vorgegebenen Kandidaten mit
-   strengem JSON-Schema, `store: false`, Prompt-Injection-Hinweis und den Modi
-   `off`, `shadow`, `review`, `automatic`;
-5. Confidence-/Margin-Gates und konservative `possibly_related`-Beziehungen für
-   inferierte Treffer.
+### Gap and completion work
 
-Ein append-only Analyseprotokoll speichert inzwischen Retrieval-Zeitpunkt,
-vollständigen begrenzten Kandidatensatz, deterministische und finale Matches,
-Provider, Modell, Promptversion, Input-Hash, Response-ID, strukturierten
-LLM-Output und Fehler pro Import beziehungsweise Reprocessing. Gelabelte
-Vendor-, Produkt-, Komponenten-, Alias-, Versionsbereich-, Fixed-Version- und
-Commit-Angaben werden strukturiert extrahiert. Kandidaten mit deterministischen
-Produkt-, Vendor-, Komponenten- oder Versionswidersprüchen werden vor dem LLM
-ausgeschlossen und mit Begründung protokolliert; chronologisch spätere
-Kandidaten werden als Widerspruch markiert. Noch offen sind unstrukturierte
-Aliasauflösung, semantisch belastbare Versionsbereichsvergleiche, breiteres
-Retrieval sowie ein ausreichend großer produktionsnaher Label-Korpus. Ein
-Offline-Evaluator berechnet Precision/Recall und liefert maschinenlesbare
-Einzelergebnisse; `automatic` verlangt nun einen bestandenen Report für die
-aktuelle Promptversion mit mindestens 0,98 Precision und 0,80 Recall. Die
-Datenschutzfreigabe und der Ausbau des Label-Korpus bleiben Produktions-Gates.
+Repository functionality cannot prove production authority, permanent identity, external availability, backup quality, or operational response.
 
-### 4. Manueller Approval-Prozess — teilweise
+1. Run a controlled production acceptance record end to end.
+2. Alert on failed publication, stalled timer, allocation exhaustion, and public canonical-route failure.
+3. Rehearse ledger reconciliation and pre-publication database restore.
+4. Require reviewed policy/evaluation artifacts for automation changes.
 
-Die geschützte Review-Oberfläche bietet Filter, Volltextsuche, Kandidatenauswahl,
-Mehrfachzuordnung, explizite Zuordnung, Notiz, Approval und Rejection. Null
-ausgewählte IDs führen bewusst zu einem neuen Advisory; analystisch bestätigte
-IDs werden als `analyst-approved` in die Publikationsplanung übernommen.
-Approval publiziert nicht implizit, sondern erfordert eine nachgelagerte lokale
-Publikationsaktion. Netzwerk-Allowlist, Basic Auth und CSRF-Schutz sind vorhanden.
+## 3. Known-CVE comparison and enrichment
 
-Eine append-only Entscheidungshistorie speichert inzwischen Einzel- und
-Batch-Entscheidungen einschließlich authentifiziertem Reviewer, IDs, Sighting-Typ
-und Notiz; die Detailansicht zeigt diese Historie. Batch-Aktionen und eine
-paginierte Queue sind ebenfalls vorhanden. Reviewer- und Administrator-Konten
-können über die geschützte Web-UI verwaltet
-werden; ein optionales Vier-Augen-Prinzip verlangt zwei unterschiedliche
-Reviewer. Für ein Endprodukt fehlen weiterhin Claiming/Zuweisung und eine
-feinere Berechtigungsmatrix.
-Außerdem sollte ein expliziter Zustandsautomat verhindern, dass Reprocessing,
-Approval und automatische Jobs einander semantisch überschreiben. Ein
-unveränderliches Match-/LLM-Ereignisprotokoll muss neben der finalen Entscheidung
-erhalten bleiben.
+### Implemented
 
-### 5. Gestaltbare Website — offen
+- Explicit identifier resolution, structured extraction, bounded candidate retrieval, deterministic contradictions, and confidence evidence.
+- Optional LLM candidate comparison in `off`, `shadow`, `review`, and `automatic` modes.
+- Versioned prompts and persisted analysis events including provider/output.
+- Offline labelled-fixture evaluation with precision and recall gates.
+- Automatic mode refuses to start without a passing current evaluation report.
 
-Öffentliche Startseite, Navigation, Texte und CSS werden als Stringliterale in
-`public_ui.py` erzeugt. Es gibt weder Seitenmodell noch Templates, Asset-Pipeline,
-Logo-Konfiguration, Impressum, FAQ oder verwaltbare Linkblöcke. Die vorhandene
-kleine responsive Oberfläche ist ein funktionaler Prototyp, keine
-Gestaltungsplattform.
+### Gap and completion work
 
-Benötigt wird ein bewusst kleines Content-/Theme-System: versionierte Templates,
-statische Assets, eine validierte Site-Konfiguration und Markdown-Seiten für
-Info, FAQ, Impressum und Datenschutz. Redaktionelle Inhalte sollten deploybar
-sein, ohne Import-, Matching- oder Publikationslogik zu ändern. Sicherheitsheader
-und Escaping dürfen durch die Umstellung nicht geschwächt werden.
+The initial fixture corpus is too small to represent decades of source formats, languages, vendor naming, forks, version syntax, and duplicate advisories. External lookup changes can cause retrieval drift.
 
-### 6. Sortierbare Tabellen — teilweise
+1. Build stratified positive, negative, ambiguous, and no-candidate fixtures.
+2. Split development and holdout fixtures; report per-source/per-era metrics.
+3. Record retrieval snapshots or candidate-set hashes for reproducibility.
+4. Add periodic drift reporting and automatic-mode revalidation.
+5. Export reviewed analyst feedback without contaminating the holdout set.
 
-Die öffentliche Publikations-API unterstützt `date_sort` und `sort_order` mit
-stabiler ID als Tie-Breaker. Die Archivliste ist dagegen fest absteigend nach
-Publikationsdatum sortiert. Review-, automatische Publikations- und Worker-
-Tabellen haben keine klickbaren Spalten oder validierten Sortierparameter.
-`confidence` wird in der Review-Liste lediglich als Maximum der Matches
-berechnet.
+## 4. Manual approval and multi-user review
 
-Alle Listen brauchen serverseitige, erlaubnislistenbasierte Sortierung mit
-stabilem sekundärem Schlüssel. Mindestens Datum, Quelle, Status, Review-Status,
-Titel und maximale Confidence sollten unterstützt werden. SQL-Spalten dürfen
-nur aus einer internen Allowlist gewählt und niemals direkt aus Query-Strings
-interpoliert werden.
+### Implemented
 
-### 7. Gruppierung und Pagination überall — teilweise
+- Pending/approved/rejected workflow with actor-attributed append-only events.
+- Managed users, administrator/reviewer roles, PBKDF2 password storage, and activation controls in the web UI.
+- Search, live confidence-range sliders, sorting, pagination, and bounded explicit-selection bulk actions.
+- Optional four-eyes policy requiring a distinct second reviewer.
+- Analysis and review history shown for each observation.
 
-Das öffentliche Archiv gruppiert nach Monat und paginiert nach dem Laden und
-Sortieren aller Treffer. Die BCP-03-Abfrage kennt `page`/`per_page`. Für Review-
-Queue, Publikationsdashboard und Worker-Liste fehlen Pagination und frei wählbare
-Gruppierung. Die Detailseiten benötigen naturgemäß keine Pagination; „überall“
-sollte deshalb als „jede potenziell unbeschränkte Collection“ präzisiert werden.
+### Gap and completion work
 
-Die gemeinsame Lösung sollte Filter, Sortierung, Gruppierung, `page` und
-`per_page` in einem `ListQuery`-Objekt validieren. Count und Seitenauswahl müssen
-in SQL stattfinden, statt zunächst die gesamte Collection in Python zu laden.
-Gruppierungen sollten zunächst Quelle, Monat, Status und Review-Status umfassen.
+Local authentication lacks SSO, MFA, account lockout/recovery, and granular permissions. There is no ownership/assignment or reviewer workload view.
 
-### 8. Fulltext-Index — teilweise
+1. Add optional assignment, saved queues, and “needs second review” filtering.
+2. Add account controls or integrate an identity provider if required.
+3. Add administrator audit views and paginated event export.
+4. Add concurrency/version checks for simultaneous decisions.
 
-SQLite FTS5 indexiert URL, Titel, Autor, Body und Extraktionsmetadaten. Trigger
-halten den Index synchron; beim Start wird eine abweichende Zeilenzahl neu
-aufgebaut. Öffentliches Archiv und Review-Queue verwenden die Suche. Wenn FTS5
-nicht verfügbar ist, fällt die Anwendung jedoch still auf eine langsamere
-`LIKE`-Suche zurück. GCVE-Datensätze, redaktionelle Seiten, Review-Notizen und
-vollständig normalisierte Identifikatoren sind nicht als eigener Suchkorpus
-modelliert.
+## 5. Website design and managed content
 
-Für den Produktionsanspruch muss definiert werden, welche Entitäten durchsuchbar
-sind. FTS5 sollte beim Deployment als Capability geprüft und überwacht werden;
-Rebuild/Integrity-Check benötigen ein Operator-Kommando. Trefferzahl,
-SQL-Pagination, Ranking und sichere Behandlung ungültiger FTS-Syntax gehören in
-die Abnahmetests.
+### Implemented
 
-## Übergreifende Abweichungen und Risiken
+The public service has a responsive baseline style, landing/archive/item/vulnerability pages, human-readable record sections, raw JSON, API/dump, and security contact route.
 
-1. **Quellenspezifische Annahmen durchdringen alle Schichten.** Ein einzelner
-   Bugtraq-Parser reicht nicht; Modell, Routing, Publikationsreferenzen, Worker,
-   UI und Tests müssen gemeinsam abstrahiert werden.
-2. **Listen werden häufig vollständig materialisiert.** Das funktioniert für den
-   Pilot, skaliert aber nicht für ein Vollarchiv und verhindert konsistente
-   DB-seitige Pagination.
-3. **Aktueller Zustand ersetzt Historie.** Review und Match-Reprocessing brauchen
-   immutable Events, damit Entscheidungen später erklärbar bleiben.
-4. **Dokumentation und Audit-Schema sind nicht deckungsgleich.** Insbesondere der
-   versprochene vollständige LLM-/Retrieval-Audit-Trail ist noch nicht vorhanden.
-5. **Ein Post entspricht einem Finding.** Beiträge mit mehreren unabhängigen
-   Schwachstellen werden nicht aufgeteilt; Multi-Source-Import erhöht dieses
-   Fehlzuordnungsrisiko.
+### Gap and completion design
 
-## Konfliktarmer Umsetzungsplan
+There is no design configurator or content management system. Operators cannot manage a logo, colors, text blocks, imprint, FAQ, navigation, or curated links through the UI.
 
-### Begonnene Umsetzung
+1. Add `site_settings`: title, description, logo reference, color tokens, footer.
+2. Add `content_pages`: slug, title, ordered safe blocks, draft/published state, revision, actor, timestamps.
+3. Add ordered navigation items and visibility.
+4. Build an admin editor with preview, validation, audit events, and rollback.
+5. Use a strict rendering allowlist; prohibit arbitrary script/style injection.
+6. Define file policy for logo/assets, size/type checks, and caching.
+7. Seed Home, About, FAQ, Imprint, and Links pages.
 
-Der erste vertikale Schnitt aus Phase 1 und Phase 4 ist umgesetzt: Ein
-validiertes `ListQuery` kapselt Filter, Sortierung, Richtung und Seitengröße. Die
-Review-Queue verwendet DB-seitiges Counting und Pagination, stabile Sortierung
-mit Allowlist sowie sortierbare Spalten für Titel, Confidence und Review-Status.
-Review-Entscheidungen werden zusätzlich append-only mit Reviewer und fachlichen
-Entscheidungsdaten protokolliert; der aktuelle Zustand bleibt als performante
-Projektion auf der Beobachtung bestehen.
-Auch Import und Reprocessing erzeugen nun append-only Analyseereignisse mit dem
-vollständigen Matching- und LLM-Auditkontext.
-Der erste Schnitt aus Phase 2 ist ebenfalls umgesetzt: Source-Registry,
-Full-Disclosure-/Bugtraq-Adapter, wiederholbare CLI-Quellenauswahl, additive
-Source-Migration, Message-ID-Deduplizierung und generische Archivdetailrouten.
-Die bestehenden Store-Methoden bleiben vorerst kompatibel, damit die weiteren
-Collections einzeln und ohne Big-Bang-Umstellung migriert werden können.
+## 6. Sortable tables
 
-Die Arbeit wird entlang stabiler Schnittstellen geschnitten. Jede Phase beginnt
-mit Vertragstests und endet mit einer Migration/Abnahme. Parallele Änderungen an
-`store.py`, `public_ui.py` und `review_ui.py` werden vermieden; diese Dateien sind
-derzeit zentrale Konfliktherde.
+The principal review table uses allowlisted sort keys, stable SQL ordering, and confidence/title/review sorting. Worker, administrative, and event lists do not all share this behavior. Introduce a reusable collection contract defining sort fields, direction, tie-breaker, filter serialization, and accessible sort state, then migrate growing lists one by one.
 
-### Phase 0 — Verträge und Sicherheitsnetz (kurzfristig)
+## 7. Grouping and pagination
 
-- Decision Records für `SourceAdapter`, `ListQuery`, Audit Events und
-  Finding-vs.-Message-Modell festlegen.
-- Bestehendes Verhalten durch Contract-Tests für FD-Import, Review-Zustände,
-  automatische Publikation, BCP-03 und FTS einfrieren.
-- Eine repräsentative Testdatenbank und anonymisierte, gelabelte Match-Stichprobe
-  anlegen; Präzisionsziel und Freigabekriterien definieren.
-- GNA-Identität, Policy, Datenschutz, Backup/Restore und Rollback als
-  Produktions-Gates dokumentieren.
+Review observations are SQL paginated, public archive pages are grouped by month and paginated, and worker history is bounded before loading files. Audit histories and small administration lists are not uniformly pageable/groupable; offset pagination may become costly on deep pages.
 
-### Phase 1 — Datenmodell und gemeinsame Query-Schicht
+1. Inventory every collection and define expected maximum size.
+2. Add shared list metadata: items, total, page/cursor, filters, and sort.
+3. Add audit/admin pagination before those tables become large.
+4. Evaluate keyset pagination for archive and event streams.
+5. Group only where it serves users: source, month, state, or actor.
 
-- Additive Migrationen: `sources`, `source_items`, `findings`,
-  `analysis_events`, `review_events`; bestehende Beobachtungen auf
-  `full-disclosure` zurückfüllen. Alte Lesepfade bleiben während der Migration
-  kompatibel.
-- Ein getestetes Repository-Modul für Filter, erlaubte Sortierfelder, stabile
-  Tie-Breaker, Count und SQL-Pagination einführen.
-- Review-/LLM-Events append-only speichern; finalen Zustand weiterhin als
-  Projektion für schnelle Abfragen anbieten.
+## 8. Full-text index
 
-**Konfliktregel:** Ein Arbeitspaket besitzt Migration und Repository. UI-Teams
-verwenden nur die neue Schnittstelle und ändern das Schema nicht parallel.
+SQLite FTS5-backed search is used when available, with a compatible `LIKE` fallback. Operators still need explicit FTS status, rebuild, drift, and performance tools.
 
-### Phase 2 — Quellenadapter
+1. Add a search-status and guarded rebuild/check command.
+2. Report whether production uses FTS5 or fallback.
+3. Test rebuild with representative database volume.
+4. Add relevance fixtures for identifiers, vendors, products, and phrases.
 
-- `SourceAdapter` mit `discover`, `fetch`, `parse`, `canonical_key` und
-  `public_path` definieren; den aktuellen FD-Code ohne Verhaltensänderung in den
-  ersten Adapter verschieben.
-- Bugtraq als zweiten Adapter mit gespeicherten Fixtures, Message-ID-basierter
-  Deduplizierung und Herkunftsmetadaten implementieren.
-- CLI/Worker auf wiederholbare `--source`-Angaben beziehungsweise konfigurierte
-  Quellen umstellen. Fehler und Checkpoints pro Quelle isolieren.
-- Generische öffentliche Detailroute über opaque Item-ID anbieten und alte
-  Full-Disclosure-URLs dauerhaft weiterleiten oder kompatibel bedienen.
+## Cross-cutting gaps
 
-### Phase 3 — Matching und kontrolliertes Approval
+- **Governance:** decide license, retention, RPO/RTO, and automation-policy ownership.
+- **Security:** prioritize login hardening/SSO from the threat model, CSRF protection, and dependency/environment scanning.
+- **Observability:** measure source runs, extraction errors, candidate counts, review latency, second-review backlog, publication outcomes, worker duration, database size, and response latency.
 
-- Vendor, Komponente, Aliase, Fixed-Version, Commit und Chronologie strukturiert
-  extrahieren; Kandidatenretrieval cachen und als Event protokollieren.
-- Deterministische harte Widersprüche vor dem LLM anwenden. Vollständigen
-  strukturierten LLM-Output, Prompt-/Provider-Version, Kandidaten und Policy-
-  Version revisionssicher speichern.
-- Gelabelten Datensatz offline auswerten. `automatic` erst nach bestandenem
-  Präzisions-, Margin-, Datenschutz-, Kosten- und Ausfalltest freigeben.
-- Review-State-Machine, Reviewer-Identität, Historie, Claiming und optionales
-  Vier-Augen-Prinzip ergänzen. Reprocessing erzeugt neue Analyse-Events und
-  überschreibt keine Entscheidungshistorie.
+## Conflict-minimizing delivery plan
 
-### Phase 4 — Collections: Sortierung, Gruppierung, Pagination, Suche
+### Phase A — production acceptance and observability
 
-- Zuerst Review-Queue, danach Publish-Dashboard, Worker-Liste, öffentliches
-  Archiv und Publikationsansicht auf `ListQuery` migrieren.
-- UI-Links für erlaubte Sortierspalten (einschließlich Confidence), Gruppen und
-  Seitengröße hinzufügen; Filterzustand in allen Links erhalten.
-- FTS-Capability-Check, Operator-Rebuild, Integritätsprüfung, Ranking und
-  DB-seitige Pagination ergänzen. Danach entscheiden, ob GCVE-Datensätze und
-  redaktionelle Inhalte in getrennte FTS-Indizes aufgenommen werden.
+Add source/publication/matching health projections and alerts; run backup/restore and controlled-publication acceptance; expand evaluation fixtures without changing matcher behavior. Prefer new health/metrics modules over rewrites of the store or UI.
 
-**Konfliktregel:** Pro Collection ein eigenes, kleines Change-Set. Änderungen an
-gemeinsamen Query-Verträgen werden vorher separat integriert; öffentliche und
-administrative UI werden nicht gleichzeitig in derselben Datei bearbeitet.
+### Phase B — public content and design subsystem
 
-### Phase 5 — Design- und Content-System
+Add an isolated content/settings schema and API, a safe renderer and defaults, then an administrator editor and preview. Keep site content separate from observations and GCVE records. Split schema/store, public rendering, and admin UI into separate commits.
 
-- Python-Stringtemplates in ein kleines Template-Paket verschieben; gemeinsame
-  Layout-, Navigations- und Komponentenverträge definieren.
-- Validierte Site-Konfiguration, versionierte Markdown-Seiten und statische
-  Assets für Logo/Favicon einführen. Startseite, Info, FAQ, Impressum,
-  Datenschutz und Links über Konfiguration/Inhalt pflegen.
-- Accessibility-, CSP-, Escaping-, Responsive- und Screenshot-Regressionstests
-  ergänzen. Content-Deploy und Anwendungscode getrennt versionieren, soweit der
-  Betriebsprozess dies erlaubt.
+### Phase C — collection consistency
 
-### Phase 6 — Ende-zu-Ende-Abnahme
+Inventory and migrate event/admin/worker lists to a shared query contract. Add keyset pagination only after measurement. Add FTS status/rebuild tooling and relevance tests.
 
-- Zwei Quellen parallel importieren; Spiegelduplikat, Multi-Finding-Post,
-  eindeutige CVE, mehrdeutige Kandidaten, LLM-Ausfall und Reprocessing prüfen.
-- Nachweisen, dass Mehrdeutigkeit in Review landet, Approval nachvollziehbar ist
-  und genau einmal als GNA 1988 publiziert wird.
-- Lasttest für Millionen Beobachtungen mit begrenzten Query-Zeiten und konstantem
-  Speicherbedarf; Backup/Restore und Upgrade/Rollback testen.
-- Öffentliche API, Dump, Archiv, Inhaltsseiten und administrative Collections
-  gegen Pagination-, Sortier-, Gruppierungs- und Suchvertrag abnehmen.
+### Phase D — identity and workflow hardening
 
-## Empfohlene Reihenfolge der nächsten Changes
+Add assignments and second-review queues; decide local-auth hardening versus SSO/MFA; add optimistic concurrency for review decisions.
 
-1. Contract-Tests und ADRs, ohne Produktionsverhalten zu ändern.
-2. `ListQuery` plus DB-seitige Review-Pagination als erster vertikaler Schnitt.
-3. Additives Source-/Event-Schema mit FD-Backfill.
-4. FD-Adapter-Extraktion; erst danach Bugtraq hinzufügen.
-5. Audit-Events und gelabelte Matching-Evaluation vor weiterer Automatisierung.
-6. Übrige Collections migrieren.
-7. Template-/Content-System zuletzt auf den dann stabilen Routen und Queries
-   aufbauen.
+### Phase E — end-to-end release gate
 
-Diese Reihenfolge reduziert Merge-Konflikte und, wichtiger, verhindert, dass
-eine optisch neue Oberfläche oder ein zusätzlicher Parser auf dem derzeit noch
-quellenspezifischen und nicht historisierten Datenmodell verfestigt wird.
+Test multi-source fixture import through extraction, retrieval, review, plan, publication, and canonical public URL. Verify audit completeness, accessibility, security, backup/restore, performance, and operator documentation.
+
+## Definition of done
+
+- Two sources demonstrably import with source health and provenance.
+- GNA 1988 plan/publish/retry/canonical URL succeeds in production acceptance.
+- Known-CVE matching meets a representative held-out gate and remains auditable.
+- Ambiguity is reviewable by named users; optional four-eyes works end to end.
+- Administrators can safely manage branding, navigation, and core content pages.
+- Every growing table has appropriate stable sorting and bounded navigation.
+- Meaningful collections support pagination/grouping appropriate to their use.
+- FTS status, indexed search, fallback, and rebuild are operationally verified.
+- Install, upgrade, backup, restore, monitoring, and handover are rehearsed.

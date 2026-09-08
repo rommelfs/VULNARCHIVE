@@ -1,156 +1,214 @@
-# VULNARCHIVE production deployment
+# Production deployment
 
-## Architecture and trust boundary
+This guide describes a single-host Debian/Ubuntu deployment with Apache, systemd,
+and SQLite. Adapt addresses and TLS paths to the target environment. Review the
+[architecture](documentation/ARCHITECTURE.md),
+[configuration](documentation/CONFIGURATION.md), and
+[maintenance guide](documentation/MAINTENANCE.md) before production use.
 
-VULNARCHIVE runs two separate HTTP processes:
+## 1. Prerequisites
 
-- `vulnarchive-web.service` is the read-only public application on `127.0.0.1:8766`.
-  It serves `/`, `/api/gcve/publication`, `/dumps/gna-1988.ndjson`,
-  `/.well-known/security.txt`, and `/archive/`.
-- `vulnarchive-review.service` is the administrative review and publication UI on
-  the private RFC1918 address configured as `VA_REVIEW_BIND` (currently
-  `10.205.22.135:8765`). Restrict it to the operator network; the public Apache
-  virtual host never proxies it.
-- `vulnarchive-sync.service` imports new messages and commits eligible GCVE records transactionally to the same local SQLite store.
+- Python 3.11+, `python3-venv`, Git, SQLite CLI
+- Apache 2.4 with `proxy`, `proxy_http`, `headers`, `ssl`, and `rewrite`
+- A DNS name and valid TLS certificate
+- A private address reachable by the reverse proxy for the review service
+- Network egress to configured sources and Vulnerability-Lookup
+- Root access for account, systemd, Apache, and environment installation
 
-There is no required local Vulnerability-Lookup installation and no dependency on port
-10001. Apache is the only public ingress. The SQLite database and both application
-ports must not be exposed directly.
+Example packages:
 
-## Installation
+```bash
+sudo apt-get update
+sudo apt-get install -y git python3 python3-venv sqlite3 apache2
+sudo a2enmod proxy proxy_http headers ssl rewrite
+```
 
-Create the service account, install the project and protected configuration, then
-install the units and Apache virtual host:
+## 2. Service account and checkout
 
-```sh
-sudo useradd --system --home /opt/vulnarchive --shell /usr/sbin/nologin vulnarchive
+```bash
+sudo useradd --system --home /opt/vulnarchive --shell /usr/sbin/nologin \
+  vulnarchive 2>/dev/null || true
+sudo install -d -o vulnarchive -g vulnarchive -m 0750 /opt/vulnarchive
+sudo -u vulnarchive git clone <repository-url> /opt/vulnarchive
+cd /opt/vulnarchive
 sudo install -d -o vulnarchive -g vulnarchive -m 0750 /opt/vulnarchive/data
-python3 -m venv /opt/vulnarchive/.venv
-/opt/vulnarchive/.venv/bin/pip install /opt/vulnarchive
-sudo install -d -o root -g vulnarchive -m 0750 /etc/vulnarchive
-sudo install -o root -g vulnarchive -m 0640 config/vulnarchive.env.example /etc/vulnarchive/vulnarchive.env
-sudo install -m 0644 deploy/vulnarchive-{web,review,sync}.service deploy/vulnarchive-sync.timer /etc/systemd/system/
+sudo -u vulnarchive python3 -m venv .venv
+sudo -u vulnarchive .venv/bin/python -m pip install --upgrade pip
+sudo -u vulnarchive .venv/bin/python -m pip install -e .
+```
+
+If `/opt/vulnarchive` already exists, verify that it is the intended clean
+checkout instead of cloning over it. A fresh `git clone` requires the destination
+not to exist (or to be empty).
+
+## 3. Environment configuration
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/vulnarchive
+sudo install -o root -g root -m 0600 config/vulnarchive.env.example \
+  /etc/vulnarchive/vulnarchive.env
+sudoedit /etc/vulnarchive/vulnarchive.env
+```
+
+At minimum, verify:
+
+- canonical `VA_PUBLIC_BASE_URL`;
+- permanent `VA_GNA_ORG_UUID` and GNA 1988 identity;
+- `VA_SOURCES` (`bugtraq` is historical/archive-only);
+- a private `VA_REVIEW_BIND`, correct `/review` prefix, narrow allowed/trusted
+  networks, and a long random bootstrap password;
+- a contact-bearing `FD_USER_AGENT`;
+- publication thresholds and switches;
+- LLM mode `off` or `shadow` initially.
+
+Never source an untrusted environment file in a privileged shell. The systemd
+units parse it as an environment file. Follow the complete
+[configuration reference](documentation/CONFIGURATION.md).
+
+## 4. Install systemd units
+
+```bash
+sudo install -o root -g root -m 0644 deploy/vulnarchive-web.service \
+  deploy/vulnarchive-review.service deploy/vulnarchive-sync.service \
+  deploy/vulnarchive-sync.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now vulnarchive-web
-# Enable the review service only when operators need it.
-sudo systemctl start vulnarchive-review
 ```
 
-`VL_URL` is optional and is used by the importer only for read-only resolution of foreign identifiers. The review service has no Vulnerability-Lookup connection and performs no external writes. GCVE reservation and publication require no external account or API key. Set `VA_REVIEW_BIND=10.205.22.135` and allow TCP/8765 only from the trusted RFC1918 operator network. No credential is loaded by the public process, and its HTTP handler implements GET only. The static `deploy/security.txt` is the single discovery document served by Apache and mirrored by the application.
+The review unit binds to `${VA_REVIEW_BIND}:8765`; the public unit binds to
+`127.0.0.1:8766`. Inspect the unit files and host firewall before starting them.
 
-## Apache and public acceptance
+## 5. Initialize and validate
 
-Enable `proxy`, `proxy_http`, `headers`, and `ssl`, install
-`deploy/apache-vuln.freearchive.org.conf`, and reload Apache after `apachectl configtest`.
-The virtual host uses an explicit route allowlist to the public app. Although the app
-also rejects unknown routes and every POST, do not add a catch-all to the review port.
+Run startup/migration and planning commands as the service account with the same
+environment used by systemd:
 
-```sh
-apachectl configtest
-curl --fail https://vuln.freearchive.org/
-curl --fail 'https://vuln.freearchive.org/api/gcve/publication?per_page=1'
-curl --fail https://vuln.freearchive.org/dumps/gna-1988.ndjson
-curl --fail https://vuln.freearchive.org/archive/
-curl --fail https://vuln.freearchive.org/.well-known/security.txt
-curl --fail -X POST https://vuln.freearchive.org/api/gcve/publication && exit 1 || true
+```bash
+sudo -u vulnarchive env $(sudo awk '!/^($|#)/ {print}' \
+  /etc/vulnarchive/vulnarchive.env) \
+  /opt/vulnarchive/.venv/bin/fd-sightings policy
+sudo -u vulnarchive env $(sudo awk '!/^($|#)/ {print}' \
+  /etc/vulnarchive/vulnarchive.env) \
+  /opt/vulnarchive/.venv/bin/fd-sightings plan-auto
 ```
 
-Confirm that the unprefixed `/connection`, `/publish`, and `/observation` paths return
-404. `/review` redirects to the separately authenticated review backend at
-`https://vuln.freearchive.org/review/`; TCP/8765 remains restricted to the proxy.
+For values containing shell metacharacters or whitespace, use a root-owned helper
+or `systemd-run` rather than the illustrative `awk` expansion above. Do not print
+secrets to shared logs.
 
-The `/vulnerability/` public route is part of the explicit Apache allowlist. When
-deploying this route for the first time, install the updated
-`deploy/apache-vuln.freearchive.org.conf`, run `apachectl configtest`, and reload
-Apache. The application upgrade script deliberately does not overwrite an
-operator-managed Apache virtual host.
+Run repository checks before exposing the service:
 
-The repository includes a guarded installer for this operator-managed step. It
-backs up an existing virtual host, restores it if `apachectl configtest` fails,
-and reloads Apache only after successful validation:
+```bash
+sudo -u vulnarchive env PYTHONPATH=src .venv/bin/python \
+  -m unittest discover -s tests -v
+sudo -u vulnarchive .venv/bin/python -m compileall -q src
+sqlite3 data/fd-sightings.sqlite 'PRAGMA integrity_check;'
+```
 
-```sh
+## 6. Apache and TLS
+
+Review `deploy/apache-vuln.freearchive.org.conf` and
+`deploy/apache-review.vuln.freearchive.org.conf`, replace hostnames, addresses,
+certificate paths, and network ACLs, then use the guarded installer:
+
+```bash
 sudo /opt/vulnarchive/deploy/install-apache-config.sh
 ```
 
-Override `VULNARCHIVE_APACHE_SITE` when the enabled virtual-host file has a
-different name. An Apache-generated HTML 404 (rather than the application's JSON
-404) for `/vulnerability/...` means this route template has not been installed.
+The installer backs up an existing site, validates Apache configuration, restores
+on failure, and reloads only after a successful config test. Ensure that:
 
-## Publication and operation
+- public paths proxy only to the read-only service;
+- `/review/` proxies to the private review service and preserves the prefix;
+- the review route is restricted to approved networks;
+- forwarding headers are trusted only from configured proxy networks;
+- `/.well-known/security.txt` is served at the canonical public origin;
+- HTTP redirects to HTTPS.
 
-Before enabling periodic publication, verify the local policy and run:
+## 7. Start services
 
-```sh
-sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings plan-auto --limit 20
+```bash
+sudo systemctl enable --now vulnarchive-web.service
+sudo systemctl enable --now vulnarchive-review.service
 sudo systemctl enable --now vulnarchive-sync.timer
 ```
 
-The authenticated review UI includes an **Archive imports** page. Operators can
-queue a start month, end month, optional per-month limit, and whether candidate
-matching is enabled. Historical workers execute sequentially to limit upstream
-load and SQLite contention. Their JSON status and captured command output are
-stored in `/opt/vulnarchive/data/workers/`. Starting an archive worker imports
-observations only; publication remains a separate policy-controlled operation.
+The review service may remain disabled at boot if operational policy requires
+manual activation, but document that choice. The sync service is a one-shot
+invoked by its timer and normally appears inactive between runs.
 
-Back up `/opt/vulnarchive/data`, configuration, and the publication ledger. Monitor the
-public and sync units separately.
+## 8. Acceptance checks
 
-## Upgrade
+```bash
+sudo systemctl status vulnarchive-web.service vulnarchive-review.service \
+  vulnarchive-sync.timer --no-pager --full
+sudo ss -ltnp | grep -E ':8765|:8766'
+curl --fail https://vuln.example/
+curl --fail https://vuln.example/.well-known/security.txt
+curl --fail https://vuln.example/api/gcve/publication >/dev/null
+curl -i http://PRIVATE_ADDRESS:8765/
+curl --fail --user USER:PASSWORD https://vuln.example/review/ >/dev/null
+```
 
-Run the supplied upgrade script from any directory; it operates on
-`/opt/vulnarchive` by default:
+An unauthenticated direct review probe should return `401`; a connection refusal
+means the process/address/firewall is wrong. Verify at least one archive page and,
+after a controlled test publication, its canonical `/vulnerability/<ID>` route.
 
-```sh
+## 9. First operational run
+
+1. Import a small historical sample with `--limit`.
+2. Inspect extraction, candidates, analysis history, and provenance in review.
+3. Create named reviewer accounts and verify roles.
+4. Leave four-eyes disabled until two independent active reviewers are ready.
+5. Run `plan-auto`; inspect every proposed action.
+6. Test backup and restore before enabling unattended publication.
+7. Enable only Full Disclosure for current sync; queue Bugtraq month ranges as
+   historical workers.
+
+## Upgrades
+
+The current repository ships **VULNARCHIVE upgrade script 4**. Confirm the
+deployed script version with `deploy/upgrade.sh --version` before relying on the
+steps described below.
+
+From a clean checkout:
+
+```bash
+cd /opt/vulnarchive
 sudo /opt/vulnarchive/deploy/upgrade.sh
 ```
 
-Do not run `git pull` or `pip install` separately. The script removes disposable
-`build/` and `src/*.egg-info/` artifacts and refuses modified tracked files,
-performs a fast-forward-only pull, tests the target source before downtime, stops the
-sync timer and application processes, creates a consistent SQLite backup, preserves the
-configuration and previous Git revision, reinstalls the package, updates the systemd
-units, applies store migrations through a non-publishing plan, restores only services
-that were active, and checks the local public endpoint. Backups are stored below
-`/var/backups/vulnarchive` by default.
+To install an already checked-out, operator-verified revision without contacting
+the Git remote, use `sudo /opt/vulnarchive/deploy/upgrade.sh --no-pull`.
 
-When upgrading once from an older script that still rejects these generated
-untracked directories, bootstrap the fixed script as follows:
+The upgrade script removes only disposable, untracked package artifacts before
+checking the tree. If an older revision must be prepared manually, the equivalent
+cleanup is `rm -rf -- build src/fd_sightings.egg-info`; verify with `git status`
+first and never use this command for a path containing tracked files.
 
-```sh
-cd /opt/vulnarchive
-rm -rf -- build src/fd_sightings.egg-info
-git pull --ff-only
-sudo ./deploy/upgrade.sh --no-pull
-```
+The script performs lock, Git, tests, source validation, database backup,
+installation, startup/migration planning, service restoration, and readiness
+checks. Read its output and complete the post-upgrade checks in the
+[maintenance guide](documentation/MAINTENANCE.md). Environment or Apache changes
+may still require explicit operator review.
 
-This one-time sequence is only necessary for the affected older script. New versions
-remove untracked build artifacts both before the Git check and after package installation.
-Confirm that the fixed script is actually present before rerunning it:
+## Rollback and recovery
 
-```sh
-/opt/vulnarchive/deploy/upgrade.sh --version
-# VULNARCHIVE upgrade script 4
-```
+Do not downgrade a migrated database blindly. Prefer rolling forward with a
+tested fix. If restoration is necessary, stop all writers, preserve current
+database/WAL/log evidence, restore the pre-upgrade verified backup, deploy its
+matching code revision, and reconcile the publication ledger before resuming
+sync. See [Maintenance](documentation/MAINTENANCE.md).
 
-If `--version` is rejected, or the output still says `uncommitted changes` rather than
-`modified tracked files`, the checkout is still on the old revision. Running that old
-script again cannot install a fix which is not present on its configured Git branch.
+## Production checklist
 
-If another deployment mechanism has already checked out the desired revision, use:
-
-```sh
-sudo /opt/vulnarchive/deploy/upgrade.sh --no-pull
-```
-
-Staging and nonstandard installations can override `VULNARCHIVE_APP_DIR`,
-`VULNARCHIVE_VENV_DIR`, `VULNARCHIVE_ENV_FILE`, `VULNARCHIVE_BACKUP_DIR`, and
-`VULNARCHIVE_DB_FILE`. On a failure after services have stopped, the script attempts to
-start the previously active services again and prints the old revision and backup path.
-For a full rollback, restore both that Git revision and its matching SQLite backup.
-
-## Authenticated review reverse proxy
-
-The review application requires HTTP Basic authentication and a client-IP allowlist. Set `VA_REVIEW_PREFIX=/review`, `VA_REVIEW_USERNAME`, and a long random `VA_REVIEW_PASSWORD`. Set `VA_REVIEW_ALLOWED_NETWORKS` to the operator/VPN CIDRs and `VA_REVIEW_TRUSTED_PROXIES` only to the reverse proxy CIDRs. Forwarded client addresses are ignored from every other peer, and absent credentials fail closed with HTTP 503.
-
-The main Apache virtual host maps `/review/` to `10.205.22.135:8765` and overwrites `X-Forwarded-For` with the actual TCP peer before proxying. Install `deploy/apache-vuln.freearchive.org.conf`, run `apachectl configtest`, and restrict TCP/8765 so only the proxy can reach it.
+- [ ] Permanent GNA identity and canonical URL confirmed
+- [ ] Secrets root-owned and mode `0600`
+- [ ] Review listener private; proxy/network trust lists narrow
+- [ ] TLS, redirect, security headers, and `security.txt` verified
+- [ ] Named administrators/reviewers created
+- [ ] Source behavior tested with a small import
+- [ ] LLM off/shadow unless a passing current evaluation exists
+- [ ] Publication policy and plan reviewed
+- [ ] Database backup and restore tested
+- [ ] Timer, logs, disk monitoring, and alert ownership assigned
+- [ ] External public and authenticated review routes validated
