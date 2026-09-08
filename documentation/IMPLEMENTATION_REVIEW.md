@@ -138,7 +138,7 @@ SQLite FTS5-backed search is used when available, with a compatible `LIKE` fallb
 
 ## Cross-cutting gaps
 
-- **Governance:** decide license, retention, RPO/RTO, and automation-policy ownership.
+- **Governance:** decide retention, RPO/RTO, and automation-policy ownership; the software license is AGPL-3.0.
 - **Security:** prioritize login hardening/SSO from the threat model, CSRF protection, and dependency/environment scanning.
 - **Observability:** measure source runs, extraction errors, candidate counts, review latency, second-review backlog, publication outcomes, worker duration, database size, and response latency.
 

@@ -18,6 +18,7 @@ interoperability documentation for VULNARCHIVE.
 | Project managers | [Implementation review](IMPLEMENTATION_REVIEW.md) | Requirement status, gaps, and delivery sequence |
 | Successor maintainers | [Handover](../HANDOVER.md) | Operational acceptance checklist |
 | Publishers | [Publication policy](../VULNARCHIVE_POLICY.md) | Evidence and publication rules |
+| Distributors | [Software license](../LICENSE) and [notice](../NOTICE) | AGPL-3.0 terms and copyright attribution |
 
 ## Documentation conventions
 

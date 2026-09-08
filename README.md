@@ -242,7 +242,14 @@ reverse-proxy prefixes.
 
 ## License and governance
 
-No license file is currently included. Do not assume redistribution rights until
-the project owner adds an explicit license. GCVE interoperability follows the
-repository's BCP documents; project-specific publication decisions follow
-[`VULNARCHIVE_POLICY.md`](VULNARCHIVE_POLICY.md).
+VULNARCHIVE is free software released under the **GNU Affero General Public
+License v3.0**. See [`LICENSE`](LICENSE) for the complete terms and
+[`NOTICE`](NOTICE) for attribution information.
+
+Copyright (c) 2026 [Computer Incident Response Center Luxembourg
+(CIRCL)](https://circl.lu/)<br>
+Copyright (c) 2026 [Sascha Rommelfangen](https://github.com/rommelfs)
+
+The GCVE BCP documents retain the licenses stated in those documents. GCVE
+interoperability follows those BCPs; project-specific publication decisions
+follow [`VULNARCHIVE_POLICY.md`](VULNARCHIVE_POLICY.md).

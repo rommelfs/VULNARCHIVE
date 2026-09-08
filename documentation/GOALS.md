@@ -85,10 +85,15 @@ opening or approving a review page.
 
 ## Governance decisions still required
 
-- Add an explicit software license.
 - Define retention periods for raw source content, worker logs, and audit events.
 - Define production recovery-time and recovery-point objectives.
 - Define the authority and process for changing evaluation thresholds and
   publication policy.
 - Decide whether external identity-provider integration is required beyond local
   managed accounts.
+
+## Licensing
+
+The VULNARCHIVE software is released under the GNU Affero General Public License
+v3.0. The separately licensed GCVE BCP documents retain their stated Creative
+Commons Attribution 4.0 terms. See the repository `LICENSE` and `NOTICE` files.

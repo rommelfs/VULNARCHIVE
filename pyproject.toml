@@ -3,6 +3,10 @@ name = "fd-sightings"
 version = "0.3.0"
 description = "VULNARCHIVE GNA 1988 mailing-list archive and GCVE publication pipeline"
 requires-python = ">=3.11"
+license = {file = "LICENSE"}
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+]
 dependencies = []
 
 [project.scripts]
