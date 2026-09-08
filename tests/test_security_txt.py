@@ -43,6 +43,7 @@ class SecurityTxtTests(unittest.TestCase):
         self.assertIn("RedirectMatch 302 ^/review$ /review/", config)
         self.assertIn("ProxyPass        /review/ http://10.205.22.135:8765/", config)
         self.assertIn("RequestHeader set X-Forwarded-For expr=%{REMOTE_ADDR}", config)
+        self.assertIn("ProxyPass        /vulnerability/ http://127.0.0.1:8766/vulnerability/", config)
 
 
 if __name__ == "__main__":

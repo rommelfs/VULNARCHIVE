@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from .models import Message
 
@@ -61,6 +61,28 @@ class _MonthParser(HTMLParser):
             self.in_blockquote = False
 
 
+def _safe_links(source_url: str, links: list[str]) -> list[str]:
+    """Resolve usable HTTP references without rejecting the whole message.
+
+    Advisory examples regularly contain placeholders such as
+    ``http://[CWP_Host]/``. Python validates bracketed hosts as IPv6 literals
+    while joining them and raises ValueError. Such an illustrative link is not
+    a retrievable reference and must not make the surrounding post fail.
+    """
+    resolved: set[str] = set()
+    for link in links:
+        if not link:
+            continue
+        try:
+            value = urljoin(source_url, link)
+            parsed = urlsplit(value)
+        except ValueError:
+            continue
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            resolved.add(value)
+    return sorted(resolved)
+
+
 def parse_message(html: str, source_url: str) -> Message:
     parser = _MessageParser()
     parser.feed(html)
@@ -69,7 +91,7 @@ def parse_message(html: str, source_url: str) -> Message:
     date_match = re.search(r"<em>Date</em>:\s*([^<]+)<br", html, re.IGNORECASE)
     published = date_match.group(1).strip() if date_match else ""
     body = "".join(parser.body_parts).strip()
-    links = sorted({urljoin(source_url, link) for link in parser.links if link})
+    links = _safe_links(source_url, parser.links)
     message_id = parser.meta.get("Message-ID", "")
     if not message_id:
         match = re.search(r"^Message-ID:\s*(\S+)", body, re.IGNORECASE | re.MULTILINE)

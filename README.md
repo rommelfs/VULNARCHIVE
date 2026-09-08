@@ -7,6 +7,8 @@ An automatic publication is an assertion by GNA 1988. It is not a validation, co
 The normative local behavior is documented in `VULNARCHIVE_POLICY.md`.
 Production service and reverse-proxy templates are documented in `DEPLOYMENT.md`.
 Project status, architectural decisions, and continuation instructions are documented in `HANDOVER.md`.
+The GCVE Best Current Practices supplied with this repository are indexed in
+[`documentation/README.md`](documentation/README.md).
 
 ## Capabilities
 
@@ -15,11 +17,14 @@ Project status, architectural decisions, and continuation instructions are docum
 - SQLite checkpoints and idempotent re-runs
 - Original source retention with SHA-256, format, and Message-ID when available
 - CVE, GCVE, GHSA, CWE, and CVSS extraction
+- Static affected-version and vulnerability-class extraction
 - Evidence-based `seen` versus `published-proof-of-concept` proposal
 - Exact Vulnerability-Lookup resolution for explicit identifiers
 - Conservative product/title candidate matching for ID-less posts
+- Auditable candidate evidence and contradiction-aware CWE/version comparison
 - JSON Lines review export
 - Local analyst review interface with filters, detail view, approval, rejection, match override, and notes
+- SQLite FTS5 full-text search across titles, authors, post bodies, CVE/CWE metadata
 - Explicit, single-observation Sighting submission
 - Dry-run or explicit batch submission of approved observations
 - Configurable, fully automatic publication policy without a review gate
@@ -41,10 +46,15 @@ Set a meaningful user agent. A read-only Vulnerability-Lookup URL is optional fo
 
 ```sh
 export FD_USER_AGENT='VULNARCHIVE/0.2 (security-team@example.org)'
-export VL_URL='https://vuln.freearchive.org'
+export VL_URL='https://vulnerability.circl.lu'
 ```
 
 GCVE-1988 reservations and publications always use the canonical local SQLite store. A complete policy template is provided in `config/vulnarchive.env.example`.
+
+`VL_URL` must point to a full Vulnerability-Lookup instance with the general
+`/api/vulnerability/` search endpoint. The local VULNARCHIVE public service is
+not suitable: it intentionally exposes only the GNA-1988 BCP-03 publication
+feed and cannot supply the CVE candidate set required by LLM comparison.
 
 ## Pilot
 
@@ -103,6 +113,21 @@ rejection, and review notes.
 
 The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
+After approval, the observation links directly to the publication action. Once
+published, that action is replaced by a link to the public record at
+`/vulnerability/<GCVE-ID>`. The review queue and public archive both use the
+SQLite full-text index for product, identifier, author, title, and body searches.
+
+Authenticated operators can also open **Archive imports** in the review interface
+to queue historical month ranges. These background jobs run sequentially, retain
+their status and logs below `data/workers/`, and import and match observations
+without publishing them. The worker detail page refreshes its live output every
+two seconds. Candidate search is disabled by default for a faster explicit-ID
+first pass; enable it when semantic candidate retrieval is required, and select
+**Reprocess existing posts** when applying it to an already imported range. The
+month fields use the browser's native calendar picker, default to the previous
+month, and prevent selection of future periods.
+
 To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
 
 ```sh
@@ -146,8 +171,19 @@ Policy thresholds are configured through environment variables:
 - `VA_PUBLISH_CONTEXT_RECORDS` and `VA_PUBLISH_SIGHTINGS` (both default `true`)
 - `VA_AUTO_CREATE_YEAR_RANGE` (default `true`)
 - `VA_MAX_DESCRIPTION_CHARS` (default `12000`)
+- `VA_MIN_INFERRED_MATCH_CONFIDENCE` (default `0.92`)
+- `VA_MIN_INFERRED_MATCH_MARGIN` (default `0.08`)
 
 The evidence score is deterministic and records which publication rule fired. It measures whether the post contains enough structured material to publish; it does not claim that the report is correct.
+
+The staged matching design, including optional LLM-assisted analysis and its
+required safeguards, is documented in
+[`documentation/AUTOMATED_MATCHING.md`](documentation/AUTOMATED_MATCHING.md).
+
+To pilot LLM comparison safely, set `OPENAI_API_KEY`, `VA_LLM_MODEL`, and
+`VA_LLM_MODE=shadow`. After evaluating retained decisions, use `review` to route
+model selections to analysts. `automatic` should only be enabled after the
+precision target and data-protection review described in the matching guide.
 
 ## Local publication store and public service
 
@@ -158,7 +194,7 @@ The public service exposes the same canonical records as a bare BCP-03 JSON list
 ## Matching policy
 
 - An explicit identifier that resolves receives confidence `1.0`.
-- ID-less reports use a deliberately conservative product and title overlap candidate. These matches never submit automatically.
+- ID-less reports use conservative product, title, version, and CWE candidates. They require review unless the explicitly enabled automatic LLM mode and the unattended confidence/margin policy both accept one clear winner.
 - Unmatched reports remain in SQLite and can be reprocessed with `--refresh` after new CVEs arrive.
 - A `Published Proof of Concept` proposal requires a PoC evidence score of at least three. Exploitation in the wild is never inferred from PoC availability.
 

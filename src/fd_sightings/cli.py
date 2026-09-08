@@ -17,7 +17,7 @@ from .vulnerability_lookup import VulnerabilityLookup
 
 DEFAULT_ARCHIVE = "https://seclists.org/fulldisclosure"
 DEFAULT_RSS = "https://seclists.org/rss/fulldisclosure.rss"
-DEFAULT_VL = "https://vuln.freearchive.org"
+DEFAULT_VL = "https://vulnerability.circl.lu"
 
 
 def period(value: str) -> tuple[int, int]:
@@ -94,17 +94,25 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def _clients(args: argparse.Namespace) -> tuple[Client, VulnerabilityLookup]:
+    from .llm import LLMMatcher
     api_key = os.getenv("VL_API_KEY", "")
     source_client = Client(args.user_agent, timeout=15, min_interval=0.5)
     lookup_client = Client(args.user_agent, timeout=8, min_interval=1.6 if api_key else 3.1)
-    return source_client, VulnerabilityLookup(lookup_client, args.vl_url, api_key)
+    llm_client = Client(args.user_agent, timeout=45, min_interval=0.0)
+    return source_client, VulnerabilityLookup(
+        lookup_client, args.vl_url, api_key, LLMMatcher.from_env(llm_client)
+    )
 
 
 def _progress(index: int, total: int, url: str) -> None:
     print(f"[{index}/{total}] {url}", file=sys.stderr)
 
 
-def _summary(results: list[Result]) -> dict[str, object]:
+def _summary(results: list[Result], vulnerability_lookup_url: str = "") -> dict[str, object]:
+    matches = [match for result in results for match in result.matches]
+    method_counts: dict[str, int] = {}
+    for match in matches:
+        method_counts[match.method] = method_counts.get(match.method, 0) + 1
     return {
         "total": len(results),
         "processed": sum(not result.skipped and not result.error for result in results),
@@ -112,6 +120,10 @@ def _summary(results: list[Result]) -> dict[str, object]:
         "failed": sum(bool(result.error) for result in results),
         "relevant": sum(result.extraction.relevant for result in results if not result.skipped),
         "matched": sum(bool(result.matches) for result in results),
+        "match_methods": method_counts,
+        "llm_evaluated": sum(any(item.startswith("llm-model:") for item in match.evidence) for match in matches),
+        "llm_errors": sum(any(item.startswith("llm-error:") for item in match.evidence) for match in matches),
+        "vulnerability_lookup_url": vulnerability_lookup_url,
         "poc": sum(result.extraction.proposed_type == "published-proof-of-concept" for result in results if not result.skipped),
         "errors": [
             {"source": result.message.source_url, "error": result.error}
@@ -132,7 +144,7 @@ def _process(args: argparse.Namespace, urls: list[str], store: Store, source_cli
         refresh=args.refresh,
         progress=_progress,
     )
-    print(json.dumps(_summary(results), indent=2))
+    print(json.dumps(_summary(results, args.vl_url), indent=2))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
                 retry_failed=args.retry_failed,
             )
-            print(json.dumps({"import": _summary(results), "publications": publications}, indent=2))
+            print(json.dumps({"import": _summary(results, args.vl_url), "publications": publications}, indent=2))
         elif args.command == "url":
             _process(args, [args.url], store, source_client, lookup)
         elif args.command == "archive":
@@ -235,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
                     refresh=args.refresh,
                     progress=_progress,
                 ))
-            print(json.dumps(_summary(aggregate), indent=2))
+            print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         return 0
     finally:
         store.close()

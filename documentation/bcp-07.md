@@ -1,0 +1,903 @@
+---
+title: GCVE-BCP-07 - Known Exploited Vulnerability - KEV Assertion Format
+---
+
+# Known Exploited Vulnerability - KEV Assertion Format
+
+![](https://gcve.eu/logos/gcve.png)
+
+- **Version**: 2.2
+- **Status**: Published (for [Public Review](https://discourse.ossbase.org/t/kev-known-exploited-vulnerabilities-potential-format-bcp-07/744))
+- **Date**: 2026-09-01
+- **Authors**: GCVE Working Group
+- **BCP ID**: BCP-07
+
+This guide is distributed and available under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/legalcode).
+
+Copyright (C) 2025-2026 GCVE Initiative.
+
+# Introduction
+
+Known Exploited Vulnerabilities (KEVs) have become a critical signal for vulnerability prioritization, operational risk management, and policy-driven remediation. Governments, CSIRTs, and sectoral authorities increasingly rely on KEV lists to mandate patching, trigger incident response, or inform compliance decisions. However, existing KEV publications are largely list-based and opaque, often asserting exploitation without clearly expressing who made the claim, when exploitation was observed versus declared, what type of evidence supports it, where it was seen, or with what level of confidence. As KEV data is increasingly consumed by automated systems and cross-border information-sharing mechanisms, the absence of structured, contextual metadata limits interoperability, trust calibration, and analytical reuse.
+
+This Best Current Practice defines a standardized KEV assertion format that preserves the intentionally simple and binary nature of KEV while adding minimal but essential context. Within the GCVE or other ecosystem, where vulnerabilities may be disclosed and referenced by multiple independent authorities, exploitation claims must be clearly distinguishable from vulnerability identifiers and treated as attributable statements rather than universal truths. The format enables multiple, potentially conflicting assertions to coexist, supports explicit attribution and confidence signaling, and facilitates interoperability with existing vulnerability, CSIRT, and policy ecosystems without turning KEV into full threat intelligence or requiring disclosure of sensitive evidence.
+
+# Known Exploited Vulnerability - KEV Assertion Format
+
+This format describes a **generic KEV (Known Exploited Vulnerability) assertion format**.
+
+The goal is to express *who claims exploitation*, *when*, *based on what*, *where it was observed*, and *with which level of confidence*, without turning KEV into full threat intelligence. A KEV assertion is usually very binary and lacking some meta-information. The format adds some information which could better capture details about the exploitation. A majority of the fields are optional except `vulnerability`, `status` and `evidence.[].source` which are recommended.
+
+## Usage Consideration
+
+KEV and CVE (or GCVE) represent different layers in the model, and that distinction is intentional.
+
+A vulnerability identifier (CVE/GCVE) is primarily about establishing the identity of a vulnerability something that the ecosystem can refer to consistently over time. KEV, on the other hand, is an assertion about observed exploitation activity, made by an observer at a given point in time. In an ideal world, the same actor that defines the vulnerability (for example, a vendor CNA) would also confirm exploitation, but in practice these concerns are frequently dissociated.
+
+There are several common situations where vulnerability identity and exploitation assertions do not originate from the same place or even at the same time:
+
+- Embargoed or restricted vulnerabilities, where exploitation is observed and tracked within a limited circle (CSIRTs, intelligence teams, trusted communities) before public disclosure or before a vendor-assigned identifier exists.
+- Situations of disagreement or asymmetry of knowledge, where an observer has high-confidence evidence of exploitation while the vendor disputes impact, scope, or even the existence of the vulnerability.
+- Early or partial observations, where exploitation activity is detected before a stable understanding of affected products, attack vectors, or vulnerability class has been established.
+
+The KEV format explicitly models exploitation as an event-level assertion linked to a vulnerability identity, rather than as part of the identity itself. This reflects operational reality: exploitation is something that happens, may occur multiple times, may be observed by different parties, and may be interpreted differently as more information becomes available.
+
+This separation already exists implicitly across today’s KEV lists, vendor advisories, and threat intelligence reports, but it is inconsistently expressed, often duplicated, and rarely machine-parseable in a coherent way. The GCVE KEV format (BCP-07) provides a structured and open way to express these assertions while anchoring them to a shared vulnerability identifier when one exists.
+
+Importantly, KEV entries are assertions, not ground truth.
+
+They may later be revised, withdrawn, or contradicted by other observers. Decoupling identity from assertions allows such evolution without disconnecting from the underlying vulnerability record. A vulnerability identity should remain stable even if claims about exploitation change over time.
+
+This model also assumes that multiple assertions per vulnerability identity are normal and expected. Different organisations may publish different KEV entries, CVSS scores, or detection signatures for the same GCVE ID, reflecting different perspectives, evidence sets, or confidence levels. Centralising identity while allowing plural assertions enables this diversity in a federated model.
+
+With respect to identity-related data (such as vendor, product, or RCE status), once a vulnerability identity is established and assigned a GCVE ID, CVE ID (or any id), that identity should be the container for stable characteristics from a vendor. Assertions such as KEV entries, CVSS vectors, or signatures should primarily reference the GCVE ID, CVE ID (or any id) and focus on what is specific to the assertion itself: context, timing, confidence, evidence, or scoring rationale. The goal is not to repeat identity-defining attributes in every assertion.
+
+Finally, this separation is essential for machine-readability. Clear boundaries between identity and assertions enable automated correlation, reasoning, and downstream decision-making across heterogeneous data sources. GCVE KEV (BCP-07) treats exploitation knowledge as structured data, without overloading the vulnerability identity layer itself.
+
+## Format
+
+It's a single JSON object (ECMA 404) per KEV entry. The KEV entry is associated to a vulnerability ID in GCVE ID or any known vulnerability identifier. 
+
+### Sample
+
+#### Combined KEV Assertion
+
+The JSON file below provides an example of a KEV file referencing a GCVE vulnerability ID.
+
+~~~json
+{
+"vulnerability": {
+    "vulnId": "GCVE-0-2025-55182"
+  },
+ "status": {
+    "exploited": true,
+    "status_reason": "confirmed",
+    "status_updated_at": "2025-12-24T10:15:00Z"
+  },
+ "characteristics": {
+    "remote_code_execution": true,
+    "authentication_required": false,
+    "local_access_required": false
+  },
+ "timestamps": {
+    "first_seen_at": "2025-12-03T10:15:00Z",
+    "asserted_at": "2025-12-05T12:10:11Z",
+    "recorded_at": "2025-12-05T13:15:00Z",
+    "last_seen_at": "2025-12-24T09:42:21Z"
+  },
+ "scope": {
+    "observation_regions": ["Europe", "North America"],
+    "victim_countries": ["LU","BE", "US", "CA"],
+    "sector": ["Telecoms", "Aerospace"],
+    "asset_exposure": ["internet-facing"],
+    "notes": "Regions reflect observed evidence, not global exclusivity."
+  },
+"evidence": [
+    {
+      "type": "incident_response",
+      "signal": "confirmed_compromise",
+      "confidence": 0.9,
+      "source": "national-csirt",
+      "details": {
+        "observed_outcome": ["initial-access", "rce"],
+        "detection_basis": ["forensics", "log-analysis"]
+      }
+    },
+    {
+      "type": "honeypot",
+      "signal": "in_the_wild_attempts",
+      "confidence": 0.6,
+      "source": "research-honeynet",
+      "details": {
+        "attempt_volume": "high",
+        "successful_exploitation": false
+      }
+    }
+  ],
+  "references": [
+    {
+      "id": "GCVE-0-2025-55182",
+      "url": "https://vulnerability.circl.lu/vuln/CVE-2025-55182#sightings"
+    }
+  ],
+}
+~~~
+
+#### CISA KEV in BCP-07 Format
+
+The JSON file below provides an example of a KEV file referencing a CISA KEV assertion.
+
+~~~json
+{
+  "vulnerability": {
+    "vulnId": "CVE-2020-29583"
+  },
+  "status": {
+    "exploited": true,
+    "status_reason": "confirmed",
+    "status_updated_at": "2021-11-03T00:00:00Z"
+  },
+  "timestamps": {
+    "first_seen_at": "2021-11-03T00:00:00Z",
+    "asserted_at": "2021-11-03T00:00:00Z",
+    "recorded_at": "2026-01-22T05:07:44Z"
+  },
+  "evidence": [
+    {
+      "type": "vendor_report",
+      "signal": "successful_exploitation",
+      "confidence": 0.8,
+      "source": "cisa-kev",
+      "details": {
+        "feed": "CISA Known Exploited Vulnerabilities Catalog",
+        "date_added": "2021-11-03",
+        "due_date": "2022-05-03",
+        "vendorProject": "Zyxel",
+        "product": "Multiple Products",
+        "vulnerabilityName": "Zyxel Multiple Products Use of Hard-Coded Credentials Vulnerability",
+        "knownRansomwareCampaignUse": "Unknown",
+        "cwes": [
+          "CWE-522"
+        ]
+      }
+    }
+  ],
+  "references": [
+    {
+      "id": "CVE-2020-29583",
+      "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2020-29583"
+    }
+  ],
+  "scope": {
+    "notes": "KEV entry: Zyxel Multiple Products Use of Hard-Coded Credentials Vulnerability | Affected: Zyxel / Multiple Products | Description: Zyxel firewalls (ATP, USG, VM) and AP Controllers (NXC2500 and NXC5500) contain a use of hard-coded credentials vulnerability in an undocumented account (\"zyfwp\") with an unchangeable password. | Required action: Apply updates per vendor instructions. | Due date: 2022-05-03 | Known ransomware campaign use (KEV): Unknown | Notes (KEV): https://nvd.nist.gov/vuln/detail/CVE-2020-29583"
+  }
+}
+~~~
+ 
+### Field Description
+
+#### `uuid`
+
+- **Type:** string (UUID version 4)
+- **Required:** no
+- **Description:** A globally unique identifier (UUID), version 4, assigned to the KEV record.
+
+####  `vulnerability` Object
+
+Describes the vulnerability being asserted as exploited.
+
+##### `vulnerability.vulnId`
+- **Type:** string
+- **Required:** yes
+- **Description:**  GCVE, CVE identifier, GHSA or any identifier of the vulnerability.
+- **Example:** `"GCVE-0-2025-55182"`
+
+##### `vulnerability.altId`
+- **Type:** array
+- **Required:** no
+- **Description:** Alternative identifiers that refer to the same vulnerability, used in addition to `vulnerability.vulnId`.
+
+#### `status` Object
+
+Represents the current exploitation status.
+
+#####  `status.exploited`
+- **Type:** boolean
+- **Description:** Indicates whether exploitation has been observed or asserted.
+- **Semantics:**  Does not imply global prevalence or universal exploitability.
+
+#####  `status.status_reason`
+- **Type:** string (enum)
+- **Allowed values:**   `confirmed`, `suspected`, `disputed`, `historical`, `unknown`
+- **Description:**  Rationale behind the exploitation status.
+
+#####  `status.status_updated_at`
+- **Type:** string (RFC3339 datetime)
+- **Description:**  Timestamp of the last change to the exploitation status in the KEV assertion.
+
+#### `characteristics` Object
+
+Describes high-level technical characteristics of the vulnerability that are relevant to exploitation assessment, without providing exploit details or turning the KEV assertion into full threat intelligence.
+
+These fields describe properties of the vulnerability itself, not necessarily every observed exploitation instance.
+
+##### `characteristics.remote_code_execution`
+- **Type:** boolean
+- **Description:** Indicates whether successful exploitation can result in remote code execution.
+- **Notes:** Does not imply exploit reliability or ease of weaponization.
+
+##### `characteristics.authentication_required`
+- **Type:** boolean
+- **Description:** Indicates whether authentication is required to exploit the vulnerability.
+- **Notes:** Reflects the weakest known exploitation path.
+
+##### `characteristics.local_access_required`
+- **Type:** boolean
+- **Description:** Indicates whether local system access is required prior to exploitation.
+- **Notes:** Useful to distinguish remote exploitation from post-compromise privilege escalation.
+
+##### `characteristics.severity`
+- **Type:** number (0.0–100)
+- **Description:** Severity associated with this vulnerability. The `severity` field represents the severity inferred from observed exploitation activity, as asserted in the KEV record, rather than a vendor- or CVSS-derived vulnerability score. It reflects the operational impact demonstrated by exploitation evidence (e.g., full system compromise observed via telemetry or honeypot data).
+
+
+#### `timestamps` Object
+
+Separates different notions of time to avoid ambiguity.
+
+##### `timestamps.first_seen_at`
+- **Type:** string (RFC3339 datetime)
+- **Description:** Earliest known exploitation activity based on technical observation.
+- **Notes:** May be estimated and updated retroactively.
+
+##### `timestamps.asserted_at`
+- **Type:** string (RFC3339 datetime)
+- **Description:**  Date when an authority or source officially declared exploitation.
+- **Notes:**   Mirrors fields such as “date added” in KEV lists.
+
+##### `timestamps.recorded_at`
+- **Type:** string (RFC3339 datetime)
+- **Description:**   Timestamp when this assertion was ingested or recorded by the collector.
+- **Notes:**  System-specific and independent of the source.
+
+##### `timestamps.last_seen_at`
+- **Type:** string (RFC3339 datetime)
+- **Description:**  Most recent confirmed observation of exploitation activity.
+- **Notes:**   Optional and often unavailable.
+
+#### `scope` Object
+
+Defines the observed context of exploitation.
+
+##### `scope.observation_regions`
+- **Type:** array of strings
+- **Description:** Geographic regions where exploitation evidence was observed. The region can be described in **UN M49** format to facilitate automation.
+- **Notes:** Reflects sensor or reporting coverage, not global limits.
+
+##### `scope.victim_countries`
+- **Type:** array of strings
+- **Description:** Countries in ISO 3166 where confirmed victims were identified.
+- **Notes:** Often incomplete or unavailable.
+
+##### `scope.sector`
+- **Type:** array of strings
+- **Description:**  Sectors targeted or affected by exploitation. The sector **SHALL** come from the [MISP galaxy sector](https://www.misp-galaxy.org/sector/).
+- **Example:** `"Telecoms"`, `"Aerospace"`
+
+##### `scope.asset_exposure`
+- **Type:** array of strings
+- **Allowed values:** `internet-facing`, `internal`, `vpn-accessible`, `unknown`
+- **Description:** Exposure context of affected assets.
+
+##### `scope.notes`
+- **Type:** string
+- **Description:** Human-readable clarifications to prevent misinterpretation.
+
+#### `evidence` Array
+
+Collection of independent signals supporting the exploitation claim.
+
+##### `evidence[].type`
+- **Type:** string (enum)
+- **Allowed values:** `incident_response`, `telemetry`, `honeypot`, `sinkhole`, `vendor_report`, `public_report`, `research_report`, `unknown`
+- **Description:**  Origin of the exploitation evidence.
+
+##### `evidence[].signal`
+- **Type:** string (enum)
+- **Allowed values: (can be multiple)**   `in_the_wild_attempts`, `successful_exploitation`,  `confirmed_compromise`, `mass_scanning`,  `weaponized_exploit_available`
+- **Description:** Nature of the observed exploitation signal.
+
+##### `evidence[].confidence`
+- **Type:** number (0.0–1.0) or enum
+- **Description:**  Confidence level associated with this evidence.
+
+The confidence **SHALL** come from the following confidence evaluation table to ensure consistent confidence values.
+
+| Confidence | Label            | Meaning (confidence in this evidence item) | Typical exploitation evidence examples |
+|-----------:|------------------|---------------------------------------------|----------------------------------------|
+| 0.0        | None             | No usable evidence or placeholder only      | Empty claim; unresolved rumor with no traceability |
+| 0.1        | Extremely low    | Unreliable and uncorroborated; major gaps   | Single anonymous post; vague claim of exploitation |
+| 0.2        | Very low         | Weak signal; high chance of misattribution  | Ambiguous scanning activity; noisy or indirect telemetry |
+| 0.3        | Low              | Plausible but thin; limited traceability    | Single non-authoritative report; partial indicators without artifacts |
+| 0.4        | Low–moderate     | Some structure and traceability; still uncertain | Reputable researcher hint with limited technical detail |
+| 0.5        | Moderate         | Credible but not fully validated; alternative explanations remain | Multiple consistent reports; exploitation attempts seen but success unclear |
+| 0.6        | Moderate–high    | Good evidence with reasonable verification  | Honeypot telemetry showing exploit-like behavior; strong IOCs |
+| 0.7        | High             | Strong and fairly direct evidence; limited uncertainty | Incident response report with logs/artifacts consistent with exploitation |
+| 0.8        | Very high        | Direct evidence or strong multi-source corroboration | Forensics confirming exploit path; authoritative confirmation of in-the-wild exploitation |
+| 0.9        | Near-certain     | Highly direct, well-attributed, well-corroborated | Confirmed compromise with clear exploit attribution across independent sources |
+| 1.0        | Certain          | Practically proven; no plausible alternative explanation | Deterministic proof (e.g., full packet/log capture) tying exploitation to the vulnerability |
+
+
+##### `evidence[].source`
+- **Type:** string
+- **Description:** Logical identifier of the reporting entity or data source. MISP org UUID? What about existing KEV source like CISA, ENISA or alike. Should we have an enum with existing ones? The source would be the only required fields has many KEV like the type of signal.
+
+##### `evidence[].details`
+- **Type:** object
+- **Description:** Structured, free-form metadata describing how the signal was derived. Additional feeds from KEV sources which are not described in this format such as `cwes`.
+- **Notes:**  Content is implementation-specific.
+
+##### `evidence[].gcve`
+- **Type:** object
+- **Description:** Structured object describing evidence originating from the GCVE ecosystem.
+- **Required:** no
+
+###### `gcve` Object
+- `evidence[].gcve.origin_uuid`
+   - **Type:** string
+   - **Description:** UUID of the origin instance where the assertion originated. GCVE maintains a list of [known KEVs](https://gcve.eu/dist/references.json) to determine the correct source UUID but the UUID **MUST** be consistent from the origin instance.
+
+- `evidence[].gcve.gna`
+   - **Type:** number (0–65535)
+   - **Description:** GNA ID identifying the origin of the assertion.
+
+- `evidence[].gcve.object_uuid`
+  - **Type:** string
+  - **Description:** UUID of the assertion associated with this evidence in the GCVE ecosystem.
+
+#### `gcve` Object
+
+- **Type:** object
+- **Description:** Structured object describing evidence originating from the GCVE ecosystem at root level.
+- **Required:** no
+
+##### `gcve.origin_uuid`
+   - **Type:** string
+   - **Description:** UUID of the origin instance where the assertion originated. GCVE maintains a list of [known KEVs](https://gcve.eu/dist/references.json) to determine the correct source UUID but the UUID **MUST** be consistent from the origin instance.
+
+#####  `gcve.gna`
+   - **Type:** number (0–65535)
+   - **Description:** GNA ID identifying the origin of the assertion.
+
+##### `gcve.object_uuid`
+  - **Type:** string
+  - **Description:** UUID of the assertion associated with this evidence in the GCVE ecosystem.
+
+
+## GCVE KEV Directory and Source Index Format
+
+BCP-07 describes individual KEV assertions, but implementers also need a way to discover which organisations publish KEV catalogues and where their machine-readable feeds are located. The GCVE initiative therefore maintains the [GCVE KEV directory](https://github.com/gcve-eu/gcve.eu-directory/blob/main/references.json), a non-mandatory index in which KEV producers can announce their catalogues and exploitation assertions.
+
+A KEV producer can be a vendor, a CSIRT, or any other organisation observing or reporting exploitation. Producers register a stable source entry in the directory and provide one of the following machine-readable endpoints:
+
+- A `bcp_07_url` that directly publishes assertions in the BCP-07 format defined by this document.
+- An `automation_url` that publishes a native KEV format. Where direct BCP-07 output is not available, a converter can transform that feed; the [gcve-eu-kev project](https://github.com/gcve-eu/gcve-eu-kev) provides scripts and examples for such conversions.
+
+Consumers and catalogue operators can use the directory to discover these distributed sources, retrieve or convert their assertions, and combine them into a more complete overview without treating any single producer as the universal source of truth. One implementation of this aggregation workflow is the [GCVE KEV catalogues overview](https://db.gcve.eu/kev-catalogs), provided by Vulnerability-Lookup.
+
+The index is a catalogue of KEV catalogues. It is not authoritative for the content of any listed catalogue and it is not required for a producer to publish BCP-07 KEV assertions. Its purpose is to facilitate discovery, correlation, and stable attribution of KEV catalogues, especially where `gcve.origin_uuid` or `evidence[].gcve.origin_uuid` values need to be resolved to a known source.
+
+### Index Object
+
+The index is a single JSON object (ECMA 404) with a `kev` array. Each item in the array describes one KEV catalogue or source.
+
+~~~json
+{
+  "kev": [
+    {
+      "uuid": "1a89b78e-f703-45f3-bb86-59eb712668bd",
+      "short_name": "CIRCL",
+      "gcve_gna_id": 1,
+      "url": "https://vulnerability.circl.lu/known-exploited-vulnerabilities-catalog",
+      "automation_url": "https://vulnerability.circl.lu/api/kev/?vulnerability_lookup_origin=1a89b78e-f703-45f3-bb86-59eb712668bd",
+      "bcp_07_url": "https://vulnerability.circl.lu/api/kev/bcp-07/?vulnerability_lookup_origin=1a89b78e-f703-45f3-bb86-59eb712668bd",
+      "description": "CIRCL provides a known-exploited vulnerability catalog and supports the different status reasons described in GCVE BCP-07.",
+      "meta": {
+        "license": "CC-BY-4.0"
+      }
+    }
+  ]
+}
+~~~
+
+### Index Field Description
+
+#### `kev` Array
+
+- **Type:** array
+- **Required:** yes
+- **Description:** Collection of KEV catalogue source descriptions.
+
+#### `kev[].uuid`
+
+- **Type:** string (UUID)
+- **Required:** yes
+- **Description:** Stable UUID identifying the KEV catalogue source. When a BCP-07 assertion uses `gcve.origin_uuid` or `evidence[].gcve.origin_uuid`, the value should match this UUID where the source is listed in the index.
+
+#### `kev[].short_name`
+
+- **Type:** string
+- **Required:** yes
+- **Description:** Short human-readable name for the KEV catalogue source.
+
+#### `kev[].gcve_gna_id`
+
+- **Type:** number (0–65535)
+- **Required:** no
+- **Description:** GNA ID associated with the source, when the source is a GCVE Numbering Authority or otherwise has an assigned GNA identifier.
+
+#### `kev[].url`
+
+- **Type:** string (URI)
+- **Required:** yes
+- **Description:** Human-facing URL for the KEV catalogue or source.
+
+#### `kev[].automation_url`
+
+- **Type:** string (URI)
+- **Required:** no
+- **Description:** Machine-readable URL for the source catalogue in its native or preferred automation format. This field may point to a format other than BCP-07.
+
+#### `kev[].bcp_07_url`
+
+- **Type:** string (URI)
+- **Required:** no
+- **Description:** Machine-readable URL where the KEV data can be retrieved in BCP-07 format. This field is optional because not every KEV source publishes BCP-07 directly. When present, consumers can prefer this URL over `automation_url` when they specifically need BCP-07 assertions.
+
+#### `kev[].description`
+
+- **Type:** string
+- **Required:** no
+- **Description:** Human-readable description of the KEV catalogue source.
+
+#### `kev[].meta`
+
+- **Type:** object
+- **Required:** no
+- **Description:** Optional metadata about the KEV catalogue source. This object is intentionally extensible to allow source-specific metadata without changing the core index format.
+
+##### `kev[].meta.license`
+
+- **Type:** string
+- **Required:** no
+- **Description:** Licence identifier for the KEV catalogue when available. SPDX identifiers SHOULD be used where an SPDX identifier exists, for example `CC-BY-4.0`, `CC0-1.0`, or `Apache-2.0`.
+
+### JSON Schema for the GCVE KEV Directory Array
+
+The following schema validates only the array of source objects stored below the directory's top-level `kev` key. It does not validate the enclosing directory object.
+
+~~~json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gcve.eu/schemas/bcp-07-kev-directory-array.schema.json",
+  "title": "GCVE-BCP-07 KEV Directory Array",
+  "description": "The array of KEV catalogue sources stored below the directory's kev key.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "uuid",
+      "short_name",
+      "url"
+    ],
+    "properties": {
+      "uuid": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Stable UUID identifying the KEV catalogue source."
+      },
+      "short_name": {
+        "type": "string",
+        "description": "Short human-readable name for the KEV catalogue source."
+      },
+      "gcve_gna_id": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 65535,
+        "description": "GNA ID associated with the source, when available."
+      },
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Human-facing URL for the KEV catalogue or source."
+      },
+      "automation_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Machine-readable URL for the source catalogue in its native or preferred automation format."
+      },
+      "bcp_07_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Machine-readable URL where KEV data can be retrieved in BCP-07 format."
+      },
+      "description": {
+        "type": "string",
+        "description": "Human-readable description of the KEV catalogue source."
+      },
+      "meta": {
+        "type": "object",
+        "description": "Optional extensible metadata about the KEV catalogue source.",
+        "additionalProperties": true,
+        "properties": {
+          "license": {
+            "type": "string",
+            "description": "Licence identifier for the KEV catalogue; use an SPDX identifier when available."
+          }
+        }
+      }
+    }
+  }
+}
+~~~
+
+### JSON Schema
+
+JSON Schema - GCVE-BCP-07 Known Exploited Vulnerability (KEV) Assertion Format.
+
+~~~json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gcve.eu/schemas/bcp-07-kev-assertion.schema.json",
+  "title": "GCVE-BCP-07 Known Exploited Vulnerability (KEV) Assertion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "vulnerability",
+    "status"
+  ],
+  "properties": {
+    "vulnerability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vulnId"
+      ],
+      "properties": {
+        "vulnId": {
+          "type": "string",
+          "description": "GCVE, CVE, GHSA or any identifier of the vulnerability."
+        },
+        "altId": {
+          "type": "array",
+          "description": "Alternative identifiers that refer to the same vulnerability, used in addition to vulnerability.vulnId.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gcve": {
+      "$ref": "#/$defs/gcveRoot",
+      "description": "Structured object describing GCVE origin metadata for the KEV assertion."
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique identifier (UUID v4) assigned to the KEV assertion record."
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exploited": {
+          "type": "boolean",
+          "description": "Indicates whether exploitation has been observed or asserted."
+        },
+        "status_reason": {
+          "type": "string",
+          "description": "Rationale behind the exploitation status.",
+          "enum": [
+            "confirmed",
+            "suspected",
+            "disputed",
+            "historical",
+            "unknown"
+          ]
+        },
+        "status_updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the last change to the exploitation status in the KEV assertion (RFC3339)."
+        }
+      }
+    },
+    "characteristics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "High-level technical characteristics relevant to exploitation assessment.",
+      "properties": {
+        "remote_code_execution": {
+          "type": "boolean",
+          "description": "Whether successful exploitation can result in remote code execution."
+        },
+        "authentication_required": {
+          "type": "boolean",
+          "description": "Whether authentication is required to exploit the vulnerability."
+        },
+        "local_access_required": {
+          "type": "boolean",
+          "description": "Whether local system access is required prior to exploitation."
+        },
+        "severity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Severity associated with this vulnerability (0.0–100)."
+        }
+      }
+    },
+    "timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Separate notions of time to avoid ambiguity.",
+      "properties": {
+        "first_seen_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Earliest known exploitation activity based on technical observation (RFC3339)."
+        },
+        "asserted_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Date when an authority or source officially declared exploitation (RFC3339)."
+        },
+        "recorded_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when this assertion was ingested/recorded by the collector (RFC3339)."
+        },
+        "last_seen_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Most recent confirmed observation of exploitation activity (RFC3339)."
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Observed context of exploitation.",
+      "properties": {
+        "observation_regions": {
+          "type": "array",
+          "description": "Geographic regions where exploitation evidence was observed (optionally UN M49).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "victim_countries": {
+          "type": "array",
+          "description": "Countries (ISO 3166) where confirmed victims were identified.",
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2
+          }
+        },
+        "sector": {
+          "type": "array",
+          "description": "Sectors targeted/affected (SHALL come from MISP galaxy sector).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "asset_exposure": {
+          "type": "array",
+          "description": "Exposure context of affected assets.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "internet-facing",
+              "internal",
+              "vpn-accessible",
+              "unknown"
+            ]
+          }
+        },
+        "notes": {
+          "type": "string",
+          "description": "Human-readable clarifications to prevent misinterpretation."
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Collection of independent signals supporting the exploitation claim.",
+      "items": {
+        "$ref": "#/$defs/evidenceItem"
+      }
+    },
+    "references": {
+      "type": "array",
+      "description": "Links/IDs referencing external resources about the vulnerability or sightings.",
+      "items": {
+        "$ref": "#/$defs/reference"
+      }
+    }
+  },
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "confidence": {
+      "description": "Confidence level: number (0.0–1.0) or an implementation-specific enum/string.",
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "evidenceSignal": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "in_the_wild_attempts",
+            "successful_exploitation",
+            "confirmed_compromise",
+            "mass_scanning",
+            "weaponized_exploit_available"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "in_the_wild_attempts",
+              "successful_exploitation",
+              "confirmed_compromise",
+              "mass_scanning",
+              "weaponized_exploit_available"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      ]
+    },
+    "gcveEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "origin_uuid": {
+          "type": "string",
+          "description": "UUID of the origin instance where the assertion originated."
+        },
+        "gna": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "GNA ID identifying the origin of the assertion."
+        },
+        "object_uuid": {
+          "type": "string",
+          "description": "UUID of the assertion associated with this evidence in the GCVE ecosystem."
+        }
+      }
+    },
+    "gcveRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GCVE metadata describing the origin and identity of the KEV assertion.",
+      "properties": {
+        "origin_uuid": {
+          "type": "string",
+          "format": "uuid",
+          "description": "UUID of the origin instance where the KEV assertion originated."
+        },
+        "gna": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "GNA ID identifying the origin of the KEV assertion."
+        },
+        "object_uuid": {
+          "type": "string",
+          "format": "uuid",
+          "description": "UUID of the KEV assertion in the GCVE ecosystem."
+        }
+      }
+    },
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Origin of the exploitation evidence.",
+          "enum": [
+            "incident_response",
+            "telemetry",
+            "honeypot",
+            "sinkhole",
+            "vendor_report",
+            "csirt_report",
+            "public_report",
+            "research_report",
+            "unknown"
+          ]
+        },
+        "signal": {
+          "$ref": "#/$defs/evidenceSignal",
+          "description": "Nature of the observed exploitation signal (string or array of strings)."
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "source": {
+          "type": "string",
+          "description": "Logical identifier of the reporting entity or data source."
+        },
+        "details": {
+          "type": "object",
+          "description": "Structured, free-form metadata describing how the signal was derived (implementation-specific).",
+          "additionalProperties": true
+        },
+        "gcve": {
+          "$ref": "#/$defs/gcveEvidence",
+          "description": "Structured object describing evidence originating from the GCVE ecosystem."
+        }
+      }
+    }
+  }
+}
+~~~
+
+# References
+
+- `gcve-eu-kev` scripts - CISA KEV and ENISA CNW EUVD to GCVE BCP-07 Converter: [https://github.com/gcve-eu/gcve-eu-kev](https://github.com/gcve-eu/gcve-eu-kev)
+
+# Acknowledgements
+
+## BCP-07 Coordinators
+
+- Cédric Bonhomme, CIRCL
+- Alexandre Dulaunoy, CIRCL
+
+## Contributions
+
+The GCVE initiative gratefully acknowledges the substantial contributions from the following individuals via [public review](https://discourse.ossbase.org/t/kev-known-exploited-vulnerabilities-potential-format-bcp-07/):
+
+- ENISA - CSIRTs network CVD WG
+- Howard Chu
+- Xavier Claude
+- Johannes Clos
+- Darses
+- Jerry Gamblin
+- Jay Jacobs
+- William Robinet
