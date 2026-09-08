@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .store import Store
+from .query import ListQuery
 from .workers import ImportWorkerManager
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
@@ -319,28 +320,48 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._send(_layout("Publication completed", f'<div class="panel"><h1>Publication run completed</h1><p>Processed {_e(len(outcomes))} archived observations.</p><p><a href="/publish">Back to publication dashboard</a></p><pre>{rendered}</pre></div>'))
 
     def _index(self, params: dict[str, list[str]]) -> None:
-        review = params.get("review", [""])[0]
-        match_status = params.get("match", [""])[0]
-        query = params.get("q", [""])[0].casefold()
-        rows = (self.server.store.search_rows(query, match_status or None, review or None)
-                if query else self.server.store.rows(match_status or None, review or None))
-        counts = {state: len(self.server.store.rows(review_state=state)) for state in ("pending", "approved", "rejected")}
+        try:
+            one = lambda name, default="": params.get(name, [default])[0]
+            request = ListQuery(
+                page=int(one("page", "1")), per_page=int(one("per_page", "50")),
+                sort=one("sort", "published"), order=one("order", "desc"),
+                search=one("q").strip(), status=one("match"), review_state=one("review"),
+            )
+        except (ValueError, TypeError) as exc:
+            self._send(_layout("Invalid review query", f'<div class="panel"><h1>Invalid review query</h1><p>{_e(exc)}</p></div>'), 400)
+            return
+        result = self.server.store.observation_page(request)
+        rows = result.items
+        counts = self.server.store.review_counts()
         table_rows = []
         for row in rows:
             extraction = row["extraction"]
             matches = row["matches"]
             tags = " ".join(f'<span class="tag">{_e(value)}</span>' for value in extraction.get("cve_ids", []) + extraction.get("cwe_ids", []))
             proposed = extraction.get("proposed_type", "seen")
-            confidence = max((float(match["confidence"]) for match in matches), default=0)
+            confidence = float(row["max_confidence"])
             href = "/observation?" + urllib.parse.urlencode({"source": row["source_url"]})
             table_rows.append(f"""<tr><td><a href="{_e(href)}"><strong>{_e(row['title'])}</strong></a><br><span class="muted">{_e(row['author'])} · {_e(row['published'])}</span><br>{tags}</td>
 <td>{_e(proposed)}</td><td>{confidence:.3f}</td><td class="{_e(row['review_state'])}">{_e(row['review_state'])}</td></tr>""")
+        def sort_link(field: str, label: str) -> str:
+            order = "asc" if request.sort != field or request.order == "desc" else "desc"
+            query = {"q": request.search, "review": request.review_state, "match": request.status,
+                     "per_page": request.per_page, "sort": field, "order": order}
+            return f'<a href="/?{_e(urllib.parse.urlencode(query))}">{_e(label)}</a>'
+        common = {"q": request.search, "review": request.review_state, "match": request.status,
+                  "per_page": request.per_page, "sort": request.sort, "order": request.order}
+        pagination = []
+        if request.page > 1:
+            pagination.append(f'<a rel="prev" href="/?{_e(urllib.parse.urlencode({**common, "page": request.page - 1}))}">Previous</a>')
+        pagination.append(f'<span>Page {request.page} of {result.pages} · {result.total} observations</span>')
+        if request.page < result.pages:
+            pagination.append(f'<a rel="next" href="/?{_e(urllib.parse.urlencode({**common, "page": request.page + 1}))}">Next</a>')
         content = f"""<div class="panel"><h1>Review queue</h1><div class="toolbar">
 <span>Pending <strong>{counts['pending']}</strong></span><span>Approved <strong>{counts['approved']}</strong></span><span>Rejected <strong>{counts['rejected']}</strong></span></div>
-<form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(params.get('q',[''])[0])}" placeholder="Search title, author, body, CVE or CWE">
-<select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), review)}</select>
-<select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), match_status)}</select><button>Filter</button></form></div>
-<div class="panel"><table><thead><tr><th>Observation</th><th>Proposal</th><th>Confidence</th><th>Review</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="4">No observations.</td></tr>'}</tbody></table></div>"""
+<form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(request.search)}" placeholder="Search title, author, body, CVE or CWE">
+<select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), request.review_state)}</select>
+<select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), request.status)}</select><input type="hidden" name="sort" value="{_e(request.sort)}"><input type="hidden" name="order" value="{_e(request.order)}"><button>Filter</button></form></div>
+<div class="panel"><table><thead><tr><th>{sort_link('title', 'Observation')}</th><th>Proposal</th><th>{sort_link('confidence', 'Confidence')}</th><th>{sort_link('review', 'Review')}</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="4">No observations.</td></tr>'}</tbody></table><nav class="toolbar" aria-label="Pagination">{' '.join(pagination)}</nav></div>"""
         self._send(_layout("Review queue", content))
 
     @staticmethod

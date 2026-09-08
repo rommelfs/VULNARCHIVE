@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Extraction, Match, Message
+from .query import ListPage, ListQuery
 
 
 SCHEMA = """
@@ -500,6 +501,59 @@ class Store:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY published DESC, source_url DESC"
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
+
+    def observation_page(self, request: ListQuery) -> ListPage:
+        """Return one stable, SQL-paginated observation collection."""
+        tokens = re.findall(r"[^\W_]+", request.search, re.UNICODE)[:12]
+        if request.search and not tokens:
+            return ListPage([], 0, request.page, request.per_page)
+        joins = ""
+        clauses: list[str] = []
+        params: list[object] = []
+        rank = ""
+        if tokens and self.fts_enabled:
+            joins = " JOIN observations_fts ON observations_fts.source_url=o.source_url"
+            clauses.append("observations_fts MATCH ?")
+            params.append(" AND ".join(f'"{token}"*' for token in tokens))
+            rank = ", bm25(observations_fts, 0.0, 5.0, 2.0, 1.0, 3.0) AS search_rank"
+        elif tokens:
+            needle = "%" + " ".join(tokens) + "%"
+            clauses.append("(o.title LIKE ? OR o.author LIKE ? OR o.body LIKE ? OR o.extraction_json LIKE ?)")
+            params.extend((needle, needle, needle, needle))
+        if request.status:
+            clauses.append("o.status = ?")
+            params.append(request.status)
+        if request.review_state:
+            clauses.append("o.review_state = ?")
+            params.append(request.review_state)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        total = int(self.db.execute("SELECT COUNT(*) FROM observations o" + joins + where, params).fetchone()[0])
+        confidence = (
+            "COALESCE((SELECT MAX(CAST(json_extract(value, '$.confidence') AS REAL)) "
+            "FROM json_each(o.matches_json)), 0)"
+        )
+        sort_columns = {
+            "published": "o.published", "title": "o.title COLLATE NOCASE",
+            "author": "o.author COLLATE NOCASE", "status": "o.status",
+            "review": "o.review_state", "confidence": confidence,
+        }
+        direction = request.order.upper()
+        primary = "search_rank ASC, " if tokens and self.fts_enabled and request.sort == "published" else ""
+        order = f" ORDER BY {primary}{sort_columns[request.sort]} {direction}, o.source_url {direction}"
+        select = f"SELECT o.*, {confidence} AS max_confidence{rank} FROM observations o"
+        page_params = [*params, request.per_page, (request.page - 1) * request.per_page]
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(select + joins + where + order + " LIMIT ? OFFSET ?", page_params)
+        return ListPage([self._decode(row) for row in rows], total, request.page, request.per_page)
+
+    def review_counts(self) -> dict[str, int]:
+        counts = {"pending": 0, "approved": 0, "rejected": 0}
+        for state, count in self.db.execute(
+            "SELECT review_state, COUNT(*) FROM observations GROUP BY review_state"
+        ):
+            if state in counts:
+                counts[str(state)] = int(count)
+        return counts
 
     def search_rows(
         self, query: str, status: str | None = None, review_state: str | None = None,
