@@ -176,7 +176,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 selected_ids + custom_ids,
                 data.get("sighting_type", [""])[0],
                 data.get("note", [""])[0],
-                self.server.auth_username,
+                actor=self.server.auth_username,
             )
         except ValueError as exc:
             self._send(_layout("Review error", f'<div class="panel"><h1>Review error</h1><p>{_e(exc)}</p></div>'), 400)
@@ -194,7 +194,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             state = states[action]
             sources = data.get("page_source", []) if action == "approve-page" else data.get("source", [])
             updated = self.server.store.review_many(
-                sources, state, data.get("note", [""])[0], self.server.auth_username
+                sources, state, data.get("note", [""])[0],
+                actor=self.server.auth_username,
             )
         except (KeyError, ValueError) as exc:
             self._send(_layout("Bulk review error", f'<div class="panel"><h1>Bulk review failed</h1><p>{_e(exc)}</p><p><a href="/">Back</a></p></div>'), 400)

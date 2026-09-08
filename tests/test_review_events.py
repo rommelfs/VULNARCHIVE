@@ -16,7 +16,9 @@ class ReviewEventTests(unittest.TestCase):
                 source = "https://example.test/advisory"
                 store.save(Message(source, "Advisory"), Extraction(relevant=True), [])
                 store.review(source, "rejected", [], note="needs evidence", actor="alice")
-                store.review(source, "approved", ["cve-2026-1234"], "seen", "verified", "bob")
+                store.review(
+                    source, "approved", ["cve-2026-1234"], "seen", "verified", actor="bob",
+                )
 
                 self.assertEqual(store.get(source)["review_state"], "approved")
                 events = store.review_events(source)
