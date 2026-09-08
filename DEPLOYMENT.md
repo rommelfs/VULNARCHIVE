@@ -118,7 +118,7 @@ Confirm that the fixed script is actually present before rerunning it:
 
 ```sh
 /opt/vulnarchive/deploy/upgrade.sh --version
-# VULNARCHIVE upgrade script 2
+# VULNARCHIVE upgrade script 4
 ```
 
 If `--version` is rejected, or the output still says `uncommitted changes` rather than

@@ -10,7 +10,7 @@ class UpgradeScriptTests(unittest.TestCase):
         self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
         for expected in (
             "set -Eeuo pipefail",
-            "UPGRADE_SCRIPT_VERSION=2",
+            "UPGRADE_SCRIPT_VERSION=4",
             "flock -n",
             "git pull --ff-only",
             "clean_build_artifacts",
@@ -24,6 +24,11 @@ class UpgradeScriptTests(unittest.TestCase):
             "systemctl daemon-reload",
             "plan-auto --limit 1",
             "curl --silent --fail --max-time 2",
+            "configured_source_ids",
+            "WARNING: VA_SOURCES is absent",
+            "Service restart applied environment changes",
+            "Checking private review service",
+            "private review service is not reachable",
         ):
             self.assertIn(expected, content)
 
@@ -32,7 +37,7 @@ class UpgradeScriptTests(unittest.TestCase):
         self.assertIn("sudo /opt/vulnarchive/deploy/upgrade.sh", deployment)
         self.assertIn("--no-pull", deployment)
         self.assertIn("rm -rf -- build src/fd_sightings.egg-info", deployment)
-        self.assertIn("VULNARCHIVE upgrade script 2", deployment)
+        self.assertIn("VULNARCHIVE upgrade script 4", deployment)
 
     def test_package_versions_are_consistent(self):
         root = Path(__file__).parents[1]
