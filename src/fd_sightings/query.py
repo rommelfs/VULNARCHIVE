@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 OBSERVATION_SORTS = frozenset({"published", "title", "author", "status", "review", "confidence"})
@@ -17,7 +18,8 @@ class ListQuery:
     search: str = ""
     status: str = ""
     review_state: str = ""
-    confidence: str = ""
+    confidence_min: float = 0.0
+    confidence_max: float = 1.0
 
     def __post_init__(self) -> None:
         if self.page < 1:
@@ -34,8 +36,10 @@ class ListQuery:
             raise ValueError("match is not supported")
         if self.review_state not in {"", "pending", "approved", "rejected"}:
             raise ValueError("review is not supported")
-        if self.confidence not in {"", "1"}:
-            raise ValueError("confidence is not supported")
+        if not math.isfinite(self.confidence_min) or not math.isfinite(self.confidence_max):
+            raise ValueError("confidence bounds must be finite")
+        if not 0 <= self.confidence_min <= self.confidence_max <= 1:
+            raise ValueError("confidence range must be between 0 and 1")
 
 
 @dataclass(frozen=True, slots=True)

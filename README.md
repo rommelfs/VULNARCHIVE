@@ -152,8 +152,8 @@ fd-sightings review
 In production, set `VA_REVIEW_BIND=10.205.22.135` and expose it through the authenticated reverse-proxy path at `https://vuln.freearchive.org/review/`. The CLI still
 defaults to localhost when it is started outside the supplied systemd unit. The
 interface supports queue filters, source evidence, match overrides, approval,
-rejection, review notes, and bounded bulk review. Filter the queue by
-**Confidence 1.000**, select individual rows, or use **Approve all shown** to
+rejection, review notes, and bounded bulk review. Filter the queue with the
+minimum/maximum confidence sliders, select individual rows, or use **Approve all shown** to
 approve the current page (up to 100 observations per request). Bulk approval
 retains all candidate IDs for each row and uses its proposed Sighting type;
 publication remains a separate action.

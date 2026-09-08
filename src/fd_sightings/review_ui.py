@@ -38,6 +38,7 @@ th{{color:var(--muted);font-size:12px;text-transform:uppercase}}.tag{{display:in
 .pending{{color:var(--warn)}}.approved{{color:var(--accent)}}.rejected{{color:var(--bad)}}.muted{{color:var(--muted)}}
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px;border-radius:7px;max-height:520px;overflow:auto}}
 .grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}label{{display:block;font-weight:600;margin:12px 0 5px}}textarea{{width:100%;min-height:90px}}
+.range-filter{{display:grid;grid-template-columns:auto minmax(120px,1fr);gap:2px 8px;align-items:center;padding:4px 8px;border:1px solid #aaa;border-radius:6px}}.range-filter label{{margin:0;font-size:12px}}.range-filter input{{padding:0;border:0}}
 @media(max-width:800px){{.grid{{grid-template-columns:1fr}}table{{display:block;overflow:auto}}}}
 </style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main id="content" style="display:block;visibility:visible;opacity:1">{content}</main></body></html>"""
     return page.encode("utf-8")
@@ -374,7 +375,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 page=int(one("page", "1")), per_page=int(one("per_page", "50")),
                 sort=one("sort", "published"), order=one("order", "desc"),
                 search=one("q").strip(), status=one("match"), review_state=one("review"),
-                confidence=one("confidence"),
+                confidence_min=float(one("confidence_min", "0")),
+                confidence_max=float(one("confidence_max", "1")),
             )
         except (ValueError, TypeError) as exc:
             self._send(_layout("Invalid review query", f'<div class="panel"><h1>Invalid review query</h1><p>{_e(exc)}</p></div>'), 400)
@@ -395,11 +397,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
         def sort_link(field: str, label: str) -> str:
             order = "asc" if request.sort != field or request.order == "desc" else "desc"
             query = {"q": request.search, "review": request.review_state, "match": request.status,
-                     "confidence": request.confidence, "per_page": request.per_page,
+                     "confidence_min": request.confidence_min,
+                     "confidence_max": request.confidence_max, "per_page": request.per_page,
                      "sort": field, "order": order}
             return f'<a href="/?{_e(urllib.parse.urlencode(query))}">{_e(label)}</a>'
         common = {"q": request.search, "review": request.review_state, "match": request.status,
-                  "confidence": request.confidence, "per_page": request.per_page,
+                  "confidence_min": request.confidence_min,
+                  "confidence_max": request.confidence_max, "per_page": request.per_page,
                   "sort": request.sort, "order": request.order}
         pagination = []
         if request.page > 1:
@@ -412,7 +416,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(request.search)}" placeholder="Search title, author, body, CVE or CWE">
 <select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), request.review_state)}</select>
 <select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), request.status)}</select>
-<select name="confidence"><option value="">All confidence scores</option><option value="1" {"selected" if request.confidence == "1" else ""}>Confidence 1.000</option></select>
+<div class="range-filter" role="group" aria-label="Confidence range">
+<label for="confidence-min">Confidence min: {_e(f'{request.confidence_min:.2f}')}</label><input id="confidence-min" type="range" name="confidence_min" min="0" max="1" step="0.01" value="{_e(request.confidence_min)}">
+<label for="confidence-max">Confidence max: {_e(f'{request.confidence_max:.2f}')}</label><input id="confidence-max" type="range" name="confidence_max" min="0" max="1" step="0.01" value="{_e(request.confidence_max)}"></div>
 <input type="hidden" name="sort" value="{_e(request.sort)}"><input type="hidden" name="order" value="{_e(request.order)}"><button>Filter</button></form></div>
 <form method="post" action="/bulk-review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
 <div class="panel"><div class="toolbar"><strong>Bulk review:</strong><button name="action" value="approve">Approve selected</button><button name="action" value="approve-page">Approve all shown ({len(rows)})</button><button class="danger" name="action" value="reject">Reject selected</button><button class="secondary" name="action" value="reset">Reset selected</button></div>

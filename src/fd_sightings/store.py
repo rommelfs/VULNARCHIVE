@@ -624,8 +624,12 @@ class Store:
         if request.review_state:
             clauses.append("o.review_state = ?")
             params.append(request.review_state)
-        if request.confidence == "1":
-            clauses.append(f"{confidence} >= 0.999999")
+        if request.confidence_min > 0:
+            clauses.append(f"{confidence} >= ?")
+            params.append(request.confidence_min)
+        if request.confidence_max < 1:
+            clauses.append(f"{confidence} <= ?")
+            params.append(request.confidence_max)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         total = int(self.db.execute("SELECT COUNT(*) FROM observations o" + joins + where, params).fetchone()[0])
         sort_columns = {
