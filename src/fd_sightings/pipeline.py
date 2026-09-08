@@ -9,6 +9,7 @@ from .models import Extraction, Match, Message
 from .parsers import parse_message
 from .store import Store
 from .vulnerability_lookup import VulnerabilityLookup
+from .sources import SourceAdapter
 
 
 @dataclass(slots=True)
@@ -29,6 +30,7 @@ def process_urls(
     semantic: bool = True,
     refresh: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
+    adapter: SourceAdapter | None = None,
 ) -> list[Result]:
     results: list[Result] = []
     total = len(urls)
@@ -42,7 +44,7 @@ def process_urls(
             # One retry bounds a stalled archive item while allowing the rest of
             # the month to continue and be summarized.
             html = source_client.get_text(url, retries=1)
-            message = parse_message(html, url)
+            message = adapter.parse(html, url) if adapter else parse_message(html, url)
             extraction = extract(message)
             matches = lookup.match(message, extraction, semantic=semantic) if extraction.relevant else []
             store.save(message, extraction, matches)
