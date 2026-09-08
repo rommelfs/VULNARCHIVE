@@ -72,6 +72,19 @@ Configure `OPENAI_API_KEY` and `VA_LLM_MODEL`, then select one mode:
   and runner-up gate as deterministic matches. Any reported contradiction caps
   confidence below the default unattended threshold.
 
+`automatic` is also startup-gated by a machine-readable evaluation report. The
+report must pass the configured precision/recall thresholds and match the current
+prompt version. Generate it with:
+
+```bash
+fd-sightings evaluate tests/fixtures/matching \
+  --output data/matching-evaluation.json
+```
+
+Then set `VA_MATCH_EVALUATION_REPORT` to that protected file. A missing, stale,
+or failing report prevents automatic mode rather than silently downgrading the
+assurance requirement.
+
 Every request uses `store: false` and a strict JSON schema. Only up to ten
 Vulnerability-Lookup candidates are sent. API errors or invalid model output
 degrade to the deterministic result and do not fail the mailing-list import.
@@ -111,26 +124,26 @@ other answers “is this candidate unambiguous enough to reference?”. Operator
 should begin with dry runs and tune thresholds against a labelled corpus rather
 than lowering them to increase match volume.
 
-## Recommended next increments
+## Remaining improvement plan
 
-1. **Build a labelled evaluation set.** Sample matched and unmatched historic
-   posts; have two reviewers label exact match, related, and no match. Measure
-   precision first, especially false references.
-2. **Extend structured extraction.** Affected-version and vulnerability-class
-   extraction is implemented. Add vendor, component, fixed versions, and
-   commit/advisory fields to the stored extraction schema.
-3. **Broaden candidate retrieval.** Query using aliases and multiple extracted
+1. **Expand and stratify the labelled evaluation set.** The evaluation runner and
+   initial fixtures exist. Add matched, unmatched, contradictory, and ambiguous
+   examples from both sources and multiple eras; preserve a holdout split and
+   measure false references first.
+2. **Measure extraction quality.** Vendor, product, component, aliases, affected
+   and fixed versions, commits, and advisory fields are represented. Add field-
+   level fixtures and metrics rather than expanding the schema without evidence.
+3. **Broaden candidate retrieval carefully.** Query using aliases and extracted
    terms, bound the number of results, cache responses, and record the API
    endpoint and retrieval time.
-4. **Add contradiction-aware scoring.** Reject candidates with incompatible
-   product, component, version, vulnerability class, or chronology even when
-   their titles look similar.
-5. **Pilot an LLM behind a feature flag.** Run it only on the bounded candidate
-   set, require schema-valid output, store the audit material, and keep it in
-   shadow mode until the labelled-set precision target is met.
-6. **Introduce explicit operating modes.** Use `off`, `shadow`, `review`, and
-   `automatic`; production should move to `automatic` only after threshold,
-   privacy, cost, timeout, and fallback behaviour have been approved.
+4. **Extend contradiction coverage.** Product/component/version/class exclusions
+   exist; add chronology, rename/fork, and vendor-transfer fixtures.
+5. **Pilot the implemented LLM modes.** Keep production in `shadow` until the
+   holdout precision target, privacy, cost, timeout, and fallback behavior have
+   been approved. Use `review` before `automatic`.
+6. **Detect drift.** Bind reports to retrieval snapshots or candidate hashes,
+   expire automatic approval after material matcher/provider changes, and show
+   per-source/per-era metrics.
 7. **Monitor and correct.** Track match method, evidence, reviewer overrides,
    false-reference rate, API/model failures, latency, and cost. Corrections must
    preserve the original decision trail rather than silently rewriting it.

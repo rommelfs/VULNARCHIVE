@@ -1,36 +1,63 @@
-# VULNARCHIVE handover
+# Operational handover
 
-## Architecture
+This checklist transfers responsibility for a VULNARCHIVE installation. Complete
+it with the outgoing and incoming maintainers; do not store secrets in this file.
 
-VULNARCHIVE imports and archives Full Disclosure messages, resolves known identifiers, and applies the configured publication policy. GCVE-1988 identifiers, BCP-05 records, reservations, and publication metadata live in one canonical SQLite database. Publication does not depend on an external write API.
+## System identity
 
-The production boundary consists of:
+- [ ] Production hostname, private review address, and canonical public URL known
+- [ ] Current Git commit/tag and deployment date recorded
+- [ ] GNA 1988 organization UUID and ownership confirmed
+- [ ] Service account, repository, data, and environment paths confirmed
+- [ ] DNS, TLS certificate renewal, and Apache ownership assigned
 
-- `vulnarchive-sync.service`: imports messages and writes eligible records to SQLite.
-- `vulnarchive-web.service`: read-only public server on `127.0.0.1:8766`.
-- `vulnarchive-review.service`: administrative UI on the configured private address
-  `10.205.22.135:8765`; firewall-restricted and never publicly proxied.
-- Apache: public TLS ingress with an explicit route allowlist and a static `security.txt`.
+## Access
 
-The public server exposes `/`, `/api/gcve/publication`, `/dumps/gna-1988.ndjson`, and `/archive/`. BCP-03 returns a bare JSON list. The dump contains exactly the canonical local publication set as compact NDJSON. `deploy/security.txt` advertises the public GCVE base and is mirrored by the direct application route.
+- [ ] At least two named active administrators exist
+- [ ] Reviewer membership and departed-user deactivation reviewed
+- [ ] Bootstrap environment credential transferred through a secure channel
+- [ ] Host, backup, monitoring, and external-provider access transferred
+- [ ] Allowed client networks and trusted proxy networks documented
 
-Review decisions support zero, one, or multiple referenced vulnerability IDs. Approved selections override automated matches for local publication; an empty selection deliberately creates a new advisory.
+## Data and sources
 
-## Configuration
+- [ ] Enabled `VA_SOURCES` recorded; archive-only Bugtraq behavior understood
+- [ ] Latest successful Full Disclosure sync and historical worker state checked
+- [ ] Database size, integrity, FTS capability, and free disk space checked
+- [ ] Backup schedule, encryption, retention, off-host copy, and last restore test recorded
+- [ ] Raw evidence and audit-event retention policy identified
 
-Use `config/vulnarchive.env.example`. `VA_GNA_ORG_UUID` is the permanent publisher identity and must not change after publication. `VL_URL` is optional and only used for read-only lookup of foreign vulnerability identifiers; local GCVE publication requires no `VL_API_KEY`.
+## Matching and publication
 
-Runtime data belongs below `data/` and must be backed up with the matching deployed code. Keep `/etc/vulnarchive/vulnarchive.env` restricted to `root:vulnarchive`.
+- [ ] Current LLM mode, model, prompt version, and API owner recorded
+- [ ] Current matching evaluation report and last fixture review identified
+- [ ] Publication policy output (`fd-sightings policy`) archived
+- [ ] Latest `fd-sightings plan-auto` reviewed
+- [ ] Publication ledger, retry process, and external dependency contacts understood
+- [ ] Optional four-eyes setting and reviewer coverage confirmed
 
-## Operations
+## Services and operations
 
-```sh
-fd-sightings policy
-fd-sightings plan-auto --limit 20
-fd-sightings sync --retry-failed
-fd-sightings public --bind 127.0.0.1 --port 8766
-```
+- [ ] Public, review, sync, and timer units pass health checks
+- [ ] Internal `401` review challenge and authenticated proxy route both tested
+- [ ] Public home, archive, vulnerability, API, dump, and `security.txt` routes tested
+- [ ] Upgrade script and Apache installer procedure demonstrated
+- [ ] Logs, alerts, escalation path, and maintenance window documented
+- [ ] Incident stop-publication, preservation, restore, and reconciliation process rehearsed
 
-Before rollout, run the unit suite, compile check, and hermetic BCP-03 acceptance suite documented in `README.md`. Then run `apachectl configtest`, confirm public GET routes, verify authentication and the IP allowlist at `/review/`, and confirm unprefixed administrative and write routes return 404/405.
+## Required reading
 
-Do not expose SQLite or port 8766 directly. Expose port 8765 only on the RFC1918 interface and only to the trusted operator subnet. Back up the SQLite database before upgrades and historical imports. Publication reservations are idempotent and must be reused after failures.
+- [Project overview](README.md)
+- [Deployment](DEPLOYMENT.md)
+- [Configuration](documentation/CONFIGURATION.md)
+- [Maintenance](documentation/MAINTENANCE.md)
+- [Architecture](documentation/ARCHITECTURE.md)
+- [Automated matching](documentation/AUTOMATED_MATCHING.md)
+- [Publication policy](VULNARCHIVE_POLICY.md)
+- [Implementation status](documentation/IMPLEMENTATION_REVIEW.md)
+
+## Open decisions to transfer
+
+Record owners and due dates outside this repository for licensing, data
+retention, recovery objectives, evaluation-threshold governance, design/content
+management, and any SSO/MFA requirement.

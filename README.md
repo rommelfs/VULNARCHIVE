@@ -1,207 +1,248 @@
 # VULNARCHIVE
 
-VULNARCHIVE (GCVE GNA 1988) imports public security mailing-list messages, beginning with Full Disclosure, preserves the source, resolves known identifiers, publishes Sightings, and allocates GCVE-1988 records for independent context or previously unidentified vulnerabilities. The `fd-sightings` command name is retained for compatibility with the pilot.
+VULNARCHIVE is a provenance-preserving archive and vulnerability-publication
+pipeline for historic security mailing lists. It imports messages, extracts
+structured vulnerability facts, compares them with known CVEs, routes uncertain
+decisions to analysts, and publishes eligible records as **GNA 1988**.
 
-An automatic publication is an assertion by GNA 1988. It is not a validation, consensus statement, or instruction for consumers to trust the source.
+The project deliberately separates evidence collection, matching, human review,
+and publication. An imported message is not treated as proof that a vulnerability
+is new, and a similarity score is not treated as a final identity decision.
 
-The normative local behavior is documented in `VULNARCHIVE_POLICY.md`.
-Production service and reverse-proxy templates are documented in `DEPLOYMENT.md`.
-Project status, architectural decisions, and continuation instructions are documented in `HANDOVER.md`.
-The GCVE Best Current Practices supplied with this repository are indexed in
-[`documentation/README.md`](documentation/README.md).
+## Project goals
 
-## Capabilities
+- Preserve primary mailing-list evidence with stable source attribution.
+- Support multiple independently selectable sources; Full Disclosure and
+  archive-only Bugtraq are built in.
+- Enrich messages with structured vendor, product, component, version, commit,
+  alias, reference, and vulnerability data.
+- Link evidence to existing CVEs when the identity is sufficiently clear.
+- Keep ambiguous cases in an auditable manual-review workflow.
+- Publish qualified context or new records under GNA 1988.
+- Provide searchable, sortable, paginated public and private collections.
+- Keep automatic matching measurable and gated by reproducible evaluation data.
 
-- Historical import by archive month or period
-- Continuous import from the official RSS feed
-- SQLite checkpoints and idempotent re-runs
-- Original source retention with SHA-256, format, and Message-ID when available
-- CVE, GCVE, GHSA, CWE, and CVSS extraction
-- Static affected-version and vulnerability-class extraction
-- Evidence-based `seen` versus `published-proof-of-concept` proposal
-- Exact Vulnerability-Lookup resolution for explicit identifiers
-- Conservative product/title candidate matching for ID-less posts
-- Auditable candidate evidence and contradiction-aware CWE/version comparison
-- JSON Lines review export
-- Local analyst review interface with filters, detail view, approval, rejection, match override, and notes
-- SQLite FTS5 full-text search across titles, authors, post bodies, CVE/CWE metadata
-- Explicit, single-observation Sighting submission
-- Dry-run or explicit batch submission of approved observations
-- Configurable, fully automatic publication policy without a review gate
-- Automatic GCVE-1988 reservation using the post's publication year
-- BCP-05 `advisory`, `analysis`, and `reference` records with explicit relationships
-- Durable publication ledger: retries reuse an already reserved identifier
+Non-goals and trust boundaries are documented in
+[`documentation/GOALS.md`](documentation/GOALS.md).
 
-## Setup
+## Current features
 
-Python 3.11 or newer is sufficient:
+| Area | Capability |
+|---|---|
+| Ingestion | Full Disclosure RSS/archive, Bugtraq archive, repeatable `--source`, historical workers |
+| Provenance | Source ID, canonical key, message ID, URL, content hash, raw message body |
+| Extraction | IDs, vendors, products, components, versions, fixes, commits, aliases, references |
+| Matching | Explicit-ID resolution, bounded candidate lookup, deterministic checks, optional LLM comparison |
+| Review | Managed users, roles, confidence filters, sorting, pagination, bulk decisions, optional four-eyes policy |
+| Audit | Append-only review events and analysis events, including LLM provider/prompt/output metadata |
+| Publication | Dry-run planning, GNA 1988 allocation, context records, new records, publication ledger |
+| Public site | Vulnerability pages, archive pages, publication API, NDJSON dump, `security.txt` |
+| Search | SQLite FTS5 when available, with a compatible `LIKE` fallback |
+| Operations | systemd units, Apache configuration, guarded upgrades, SQLite backup before migration |
 
-```sh
+See [`documentation/FEATURES.md`](documentation/FEATURES.md) for behavior,
+limitations, and status.
+
+## Architecture at a glance
+
+```text
+mailing-list source -> adapter/parser -> extraction -> candidate lookup
+                                         |              |
+                                         v              v
+                                      SQLite <- analysis events
+                                         |
+                              review + optional LLM decision
+                                         |
+                                  publication policy
+                                         |
+                              GNA 1988 records + ledger
+                                         |
+                                  read-only public UI
+```
+
+The private review service and public read-only service are separate processes.
+SQLite is the canonical local store and runs in WAL mode. See
+[`documentation/ARCHITECTURE.md`](documentation/ARCHITECTURE.md).
+
+## Requirements
+
+- Python 3.11 or newer
+- SQLite with FTS5 recommended
+- Network access to configured mailing-list sources and Vulnerability-Lookup
+- For production: a dedicated Unix account, systemd, Apache 2.4, and TLS
+- Optional: an OpenAI-compatible Responses API for bounded LLM comparison
+
+There are no mandatory third-party Python runtime dependencies.
+
+## Quick start for development
+
+```bash
+git clone <repository-url> VULNARCHIVE
+cd VULNARCHIVE
 python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -e .
+cp config/vulnarchive.env.example .env.local
 ```
 
-Set a meaningful user agent. A read-only Vulnerability-Lookup URL is optional for resolving foreign identifiers:
+Load only a development-safe subset of `.env.local`; do not commit credentials.
+The application reads configuration from process environment variables, not from
+the file automatically.
 
-```sh
-export FD_USER_AGENT='VULNARCHIVE/0.2 (security-team@example.org)'
-export VL_URL='https://vulnerability.circl.lu'
-```
+Initialize the database and inspect the current publication plan:
 
-GCVE-1988 reservations and publications always use the canonical local SQLite store. A complete policy template is provided in `config/vulnarchive.env.example`.
-
-`VL_URL` must point to a full Vulnerability-Lookup instance with the general
-`/api/vulnerability/` search endpoint. The local VULNARCHIVE public service is
-not suitable: it intentionally exposes only the GNA-1988 BCP-03 publication
-feed and cannot supply the CVE candidate set required by LLM comparison.
-
-## Pilot
-
-Process one known message:
-
-```sh
-fd-sightings url https://seclists.org/fulldisclosure/2026/Sep/27
-```
-
-Process a small historical sample:
-
-```sh
-fd-sightings archive --from-period 2026-08 --to-period 2026-09 --limit 10
-```
-
-Archive imports use a 15-second request timeout and one retry per message. A
-missing or stalled individual message is reported in the final `errors` list and
-does not stop the remaining month. Progress is printed before each fetch, so a
-healthy 121-message month still takes at least about a minute at the polite
-request interval.
-
-Process the current feed. Repeated runs skip URLs already stored:
-
-```sh
-fd-sightings rss
-```
-
-For the continuous Phase-2 operation, import the current feed and immediately apply the automatic publication policy in one idempotent run:
-
-```sh
-fd-sightings sync
-```
-
-This command does not require `VL_API_KEY`: GCVE identifiers and records are
-reserved and published transactionally in the local SQLite store. An external
-Vulnerability-Lookup connection remains optional for resolving foreign IDs and
-finding candidates; already completed publications are skipped.
-
-Export the review queues:
-
-```sh
-fd-sightings export --status matched --output matched.jsonl
-fd-sightings export --status unmatched --output unmatched.jsonl
-```
-
-Start the local review interface:
-
-```sh
-fd-sightings review
-```
-
-In production, set `VA_REVIEW_BIND=10.205.22.135` and expose it through the authenticated reverse-proxy path at `https://vuln.freearchive.org/review/`. The CLI still
-defaults to localhost when it is started outside the supplied systemd unit. The
-interface supports queue filters, source evidence, match overrides, approval,
-rejection, and review notes.
-
-The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
-
-After approval, the observation links directly to the publication action. Once
-published, that action is replaced by a link to the public record at
-`/vulnerability/<GCVE-ID>`. The review queue and public archive both use the
-SQLite full-text index for product, identifier, author, title, and body searches.
-
-Authenticated operators can also open **Archive imports** in the review interface
-to queue historical month ranges. These background jobs run sequentially, retain
-their status and logs below `data/workers/`, and import and match observations
-without publishing them. The worker detail page refreshes its live output every
-two seconds. Candidate search is disabled by default for a faster explicit-ID
-first pass; enable it when semantic candidate retrieval is required, and select
-**Reprocess existing posts** when applying it to an already imported range. The
-month fields use the browser's native calendar picker, default to the previous
-month, and prevent selection of future periods.
-
-To reduce traffic and accept only explicit identifiers during a large first pass, add `--no-semantic` before the subcommand:
-
-```sh
-fd-sightings --no-semantic archive --from-period 2025-01 --to-period 2025-12
-```
-
-## Automatic VULNARCHIVE publication
-
-The automated path does not use analyst approval. First inspect the active policy and a non-writing plan:
-
-```sh
+```bash
+mkdir -p data
 fd-sightings policy
-fd-sightings plan-auto --limit 20
+fd-sightings plan-auto
 ```
 
-Publish every eligible, not-yet-published observation:
+Import a small historical sample without automatic publication:
 
-```sh
-fd-sightings publish-auto
+```bash
+fd-sightings archive --source full-disclosure \
+  --from-period 2024-01 --to-period 2024-01 --limit 5
 ```
 
-Failures are recorded and are not retried implicitly. After correcting a temporary problem:
+Start the local interfaces on loopback:
 
-```sh
+```bash
+fd-sightings review --bind 127.0.0.1 --port 8765
+fd-sightings public --bind 127.0.0.1 --port 8766
+```
+
+The review UI requires `VA_REVIEW_USERNAME` and `VA_REVIEW_PASSWORD`. Never bind
+it to an untrusted interface without a reverse proxy, TLS, authentication, and
+network restrictions.
+
+## Common commands
+
+```bash
+# Current feeds from configured/default sources
+fd-sightings rss --source full-disclosure
+
+# Import and publish eligible current-feed entries
+fd-sightings sync --source full-disclosure --retry-failed
+
+# Historical backfill from several sources
+fd-sightings archive --source full-disclosure --source bugtraq \
+  --from-period 2001-01 --to-period 2001-03
+
+# One URL
+fd-sightings url https://seclists.org/fulldisclosure/2024/Jan/1
+
+# Review/public servers
+fd-sightings review --bind 127.0.0.1 --port 8765
+fd-sightings public --bind 127.0.0.1 --port 8766
+
+# Publication preview and execution
+fd-sightings plan-auto
 fd-sightings publish-auto --retry-failed
+
+# Exports
+fd-sightings export --output observations.ndjson
+fd-sightings export-publications --output publications.ndjson
+
+# Offline matching evaluation; exit status 2 means the gate failed
+fd-sightings evaluate tests/fixtures/matching \
+  --output data/matching-evaluation.json
 ```
 
-Export the publication ledger:
+All data commands accept `--db PATH`. The default is
+`data/fd-sightings.sqlite`.
 
-```sh
-fd-sightings export-publications --output publications.jsonl
+## Source configuration
+
+`VA_SOURCES` is a comma-separated list used by unattended sync and as the
+default selection in the historical-import UI:
+
+```bash
+VA_SOURCES=full-disclosure,bugtraq
 ```
 
-For known CVE, GCVE, or GHSA identifiers, the default policy publishes a Sighting and—when the context threshold is met—one GCVE-1988 `analysis` or `reference` record related to all resolved identifiers in the post. For an eligible post with no resolved identifier, it publishes a new `advisory`. A PoC additionally creates a `published-proof-of-concept` Sighting for the new GCVE record.
+Bugtraq has no current RSS adapter, so enabling it does not create current-feed
+traffic. Use an archive command or queue a date range under **Review -> Archive
+imports**. Unknown source names fail validation instead of being ignored.
 
-Policy thresholds are configured through environment variables:
+## Matching and LLM safety
 
-- `VA_MIN_NEW_RECORD_SCORE` (default `5`)
-- `VA_MIN_CONTEXT_RECORD_SCORE` (default `3`)
-- `VA_REQUIRE_PRODUCT_FOR_NEW` (default `true`)
-- `VA_PUBLISH_CONTEXT_RECORDS` and `VA_PUBLISH_SIGHTINGS` (both default `true`)
-- `VA_AUTO_CREATE_YEAR_RANGE` (default `true`)
-- `VA_MAX_DESCRIPTION_CHARS` (default `12000`)
-- `VA_MIN_INFERRED_MATCH_CONFIDENCE` (default `0.92`)
-- `VA_MIN_INFERRED_MATCH_MARGIN` (default `0.08`)
+The LLM is an optional comparator for candidates already obtained from the
+configured Vulnerability-Lookup service; it is not allowed to perform an open
+web search or invent candidates. Supported modes are `off`, `shadow`, `review`,
+and `automatic`. Start with `shadow`.
 
-The evidence score is deterministic and records which publication rule fired. It measures whether the post contains enough structured material to publish; it does not claim that the report is correct.
-
-The staged matching design, including optional LLM-assisted analysis and its
-required safeguards, is documented in
+`automatic` mode requires `VA_MATCH_EVALUATION_REPORT` to reference a passing,
+current report generated by `fd-sightings evaluate`. This makes automatic-mode
+activation an explicit, testable operational decision. Details are in
 [`documentation/AUTOMATED_MATCHING.md`](documentation/AUTOMATED_MATCHING.md).
 
-To pilot LLM comparison safely, set `OPENAI_API_KEY`, `VA_LLM_MODEL`, and
-`VA_LLM_MODE=shadow`. After evaluating retained decisions, use `review` to route
-model selections to analysts. `automatic` should only be enabled after the
-precision target and data-protection review described in the matching guide.
+## Review and publication
 
-## Local publication store and public service
+The private UI supports managed analyst accounts, admin/reviewer roles,
+confidence ranges, bulk approval/rejection, immutable event history, and an
+optional four-eyes rule. A review decision and a publication are distinct
+operations. Bulk actions apply only to explicitly selected rows and are bounded.
 
-The collector reserves and publishes GCVE-1988 records transactionally in its canonical SQLite store. `VL_URL` is optional and only supports read-only resolution of foreign identifiers. Run the isolated public service with `fd-sightings public`; deployment routing and the private review-service boundary are documented in `DEPLOYMENT.md`.
+Publication policy thresholds are configured through environment variables.
+Always inspect `fd-sightings plan-auto` before changing thresholds or enabling a
+new source. Published output remains traceable through the publication ledger.
 
-The public service exposes the same canonical records as a bare BCP-03 JSON list at `GET /api/gcve/publication` and as compact, deterministically ordered UTF-8 NDJSON at `GET /dumps/gna-1988.ndjson`.
+## Public endpoints
 
-## Matching policy
+- `/` — project landing page
+- `/archive/` — paginated mailing-list archive
+- `/archive/item/<content-hash>` — archived source item
+- `/vulnerability/<GCVE-ID>` — human-readable vulnerability page
+- `/api/gcve/publication` — publication API
+- `/dumps/gna-1988.ndjson` — publication dump
+- `/.well-known/security.txt` — security contact policy
 
-- An explicit identifier that resolves receives confidence `1.0`.
-- ID-less reports use conservative product, title, version, and CWE candidates. They require review unless the explicitly enabled automatic LLM mode and the unattended confidence/margin policy both accept one clear winner.
-- Unmatched reports remain in SQLite and can be reprocessed with `--refresh` after new CVEs arrive.
-- A `Published Proof of Concept` proposal requires a PoC evidence score of at least three. Exploitation in the wild is never inferred from PoC availability.
+The review application is intentionally not part of the public service. A
+production reverse proxy may expose it under an authenticated `/review/` prefix,
+restricted to trusted networks.
 
-The current parser treats one mailing-list post as one finding. Before broad multi-list production, thread-aware splitting of posts containing multiple independent vulnerabilities should be added.
+## Documentation
 
-## Tests
+- [Documentation index](documentation/README.md)
+- [Goals and trust boundaries](documentation/GOALS.md)
+- [Features and current status](documentation/FEATURES.md)
+- [Architecture and data flow](documentation/ARCHITECTURE.md)
+- [Configuration reference](documentation/CONFIGURATION.md)
+- [Production installation and upgrades](DEPLOYMENT.md)
+- [Maintenance and incident procedures](documentation/MAINTENANCE.md)
+- [Automated matching](documentation/AUTOMATED_MATCHING.md)
+- [Implementation review and remaining work](documentation/IMPLEMENTATION_REVIEW.md)
+- [Handover checklist](HANDOVER.md)
+- [Publication policy](VULNARCHIVE_POLICY.md)
+- [BCP index](documentation/README.md#gcve-best-current-practices)
 
-```sh
+## Development and testing
+
+```bash
 PYTHONPATH=src python -m unittest discover -s tests -v
+python -m compileall -q src tests
+git diff --check
 ```
+
+Changes to matching behavior should add labelled fixtures and regenerate the
+evaluation report. Changes to storage must remain forward-migrating and be tested
+against legacy rows. Changes to public/review routes should test both direct and
+reverse-proxy prefixes.
+
+## Security and responsible operation
+
+- Keep the review backend private and authenticated.
+- Store secrets only in `/etc/vulnarchive/vulnarchive.env` with restrictive
+  permissions in production.
+- Treat imported content, LLM output, and external API responses as untrusted.
+- Back up both the SQLite database and associated WAL/SHM state correctly.
+- Do not manually edit publication records without preserving an audit event.
+- Report security issues using `deploy/security.txt`.
+
+## License and governance
+
+No license file is currently included. Do not assume redistribution rights until
+the project owner adds an explicit license. GCVE interoperability follows the
+repository's BCP documents; project-specific publication decisions follow
+[`VULNARCHIVE_POLICY.md`](VULNARCHIVE_POLICY.md).

@@ -25,6 +25,16 @@ VERSION_CONTEXT_RE = re.compile(
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)",
     re.IGNORECASE,
 )
+VERSION_CONSTRAINT_RE = re.compile(
+    r"\b(?:versions?|v)?\s*(before|prior to|through|up to|<=|<|>=|>|after)\s*"
+    r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)", re.IGNORECASE,
+)
+FIXED_VERSION_RE = re.compile(
+    r"\b(?:fixed|patched|resolved)\s+(?:in|by|with)?\s*(?:version|release|v)?\s*"
+    r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)", re.IGNORECASE,
+)
+COMMIT_RE = re.compile(r"\b(?:commit|revision)\s+([0-9a-f]{7,40})\b", re.IGNORECASE)
+FIELD_RE = re.compile(r"(?im)^\s*(vendor|product|component|module|aliases?)\s*:\s*([^\r\n]+)")
 VULNERABILITY_TYPES = {
     "buffer-overflow": re.compile(r"\bbuffer overflow\b", re.IGNORECASE),
     "code-execution": re.compile(r"\b(?:remote |arbitrary )?code execution|\bRCE\b", re.IGNORECASE),
@@ -63,6 +73,19 @@ def extract(message: Message) -> Extraction:
     text = f"{message.title}\n{message.body}"
     evidence: list[str] = []
     score = 0
+    fields: dict[str, list[str]] = {}
+    for name, value in FIELD_RE.findall(text):
+        fields.setdefault(name.casefold(), []).append(value.strip()[:200])
+    explicit_product = (fields.get("product") or [""])[0]
+    aliases = fields.get("alias", []) + fields.get("aliases", [])
+    constraints = [
+        {"operator": match.group(1).casefold(), "version": match.group(2)}
+        for match in VERSION_CONSTRAINT_RE.finditer(text)
+    ]
+    fixed_versions = {match.group(1) for match in FIXED_VERSION_RE.finditer(text)}
+    affected_versions = {
+        match.group(1) for match in VERSION_CONTEXT_RE.finditer(text)
+    } - fixed_versions
 
     if re.search(r"\b(proof[- ]of[- ]concept|PoC)\b", text, re.IGNORECASE):
         evidence.append("explicit PoC wording")
@@ -86,8 +109,14 @@ def extract(message: Message) -> Extraction:
         gcve_ids=_unique(GCVE_RE, text),
         cwe_ids=_unique(CWE_RE, text),
         cvss_vectors=sorted(set(CVSS_RE.findall(text))),
-        product_hint=product_hint(message.title),
-        affected_versions=sorted({match.group(1) for match in VERSION_CONTEXT_RE.finditer(text)}),
+        product_hint=explicit_product or product_hint(message.title),
+        vendor_hint=(fields.get("vendor") or [""])[0],
+        component_hint=(fields.get("component") or fields.get("module") or [""])[0],
+        product_aliases=sorted({item.strip() for value in aliases for item in re.split(r"[,;]", value) if item.strip()}),
+        affected_versions=sorted(affected_versions),
+        version_constraints=constraints,
+        fixed_versions=sorted(fixed_versions),
+        commits=sorted({match.group(1).lower() for match in COMMIT_RE.finditer(text)}),
         vulnerability_types=sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(text)),
         poc_score=score,
         poc_evidence=evidence,
