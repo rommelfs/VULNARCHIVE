@@ -84,7 +84,7 @@ class PublicHandler(BaseHTTPRequestHandler):
 <p>Public mailing-list archive and GCVE publication feed for GNA 1988.</p>
 <ul><li><a href=\"/api/gcve/publication\">GCVE publication API</a></li>
 <li><a href=\"/dumps/gna-1988.ndjson\">GNA 1988 NDJSON dump</a></li>
-<li><a href=\"/archive/\">Full Disclosure archive</a></li></ul></div>""")
+<li><a href=\"/archive/\">Mailing-list archive</a></li></ul></div>""")
             self._send(body, "text/html; charset=utf-8")
         elif parsed.path == "/api/gcve/publication":
             status, body = publication_response(self.server.store, parsed.query)
@@ -99,6 +99,12 @@ class PublicHandler(BaseHTTPRequestHandler):
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
+        elif parsed.path.startswith("/archive/item/"):
+            content_hash = parsed.path.removeprefix("/archive/item/").strip("/")
+            if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+                self._json({"error": "not found"}, 404)
+            else:
+                self._archive_item(content_hash)
         elif parsed.path.startswith("/vulnerability/"):
             self._vulnerability(parsed.path.removeprefix("/vulnerability/").strip("/"))
         else:
@@ -150,7 +156,8 @@ class PublicHandler(BaseHTTPRequestHandler):
             items = "".join(
                 f'<li><time datetime="{published.date().isoformat() if published else ""}">'
                 f'{published.date().isoformat() if published else "Unknown"}</time>'
-                f'<a href="/archive/full-disclosure/{urllib.parse.quote(urllib.parse.urlsplit(str(row["source_url"])).path.removeprefix("/fulldisclosure/"), safe="/")}">{html.escape(str(row["title"]))}</a></li>'
+                f'<span><a href="/archive/item/{row["content_hash"]}">{html.escape(str(row["title"]))}</a>'
+                f'<br><small class="muted">{html.escape(str(row.get("source_id") or "full-disclosure"))}</small></span></li>'
                 for row, published in entries
             )
             sections += f'<section><h2>{html.escape(heading)}</h2><ul class="archive-list">{items}</ul></section>'
@@ -178,7 +185,7 @@ class PublicHandler(BaseHTTPRequestHandler):
         pagination.append(f'<li>Page {page} of {pages} · {total} posts</li>')
         if page < pages:
             pagination.append(f'<li><a rel="next" href="/archive/?{urllib.parse.urlencode({**common, "page": page + 1})}">Next</a></li>')
-        content = (f'<div class="panel"><h1>Full Disclosure archive</h1>'
+        content = (f'<div class="panel"><h1>Mailing-list archive</h1>'
                    f'<form method="get" action="/archive/" role="search"><label>Full-text search '
                    f'<input type="search" name="q" value="{html.escape(search_query, quote=True)}" maxlength="200" placeholder="Product, CVE, author or report text"></label> '
                    f'<button>Search</button></form>'
@@ -196,6 +203,25 @@ class PublicHandler(BaseHTTPRequestHandler):
         body = _public_layout(str(row["title"]), f'<div class="panel"><h1>{html.escape(str(row["title"]))}</h1><p>{html.escape(str(row["author"]))} · <time datetime="{html.escape(date)}">{html.escape(date)}</time></p><pre>{html.escape(str(row["body"]))}</pre></div>')
         self._send(body, "text/html; charset=utf-8")
 
+    def _archive_item(self, content_hash: str) -> None:
+        row = self.server.store.get_by_content_hash(content_hash)
+        if not row:
+            self._json({"error": "not found"}, 404)
+            return
+        self._render_archive_row(row)
+
+    def _render_archive_row(self, row: dict[str, object]) -> None:
+        published = _post_date(row.get("published"))
+        date = published.date().isoformat() if published else str(row.get("published") or "Unknown date")
+        source_name = str(row.get("source_id") or "source").replace("-", " ").title()
+        content = (
+            f'<div class="panel"><h1>{html.escape(str(row["title"]))}</h1>'
+            f'<p>{html.escape(str(row["author"]))} · <time datetime="{html.escape(date)}">{html.escape(date)}</time>'
+            f' · {html.escape(source_name)}</p><p><a rel="noreferrer" href="{html.escape(str(row["source_url"]), quote=True)}">Original source</a></p>'
+            f'<pre>{html.escape(str(row["body"]))}</pre></div>'
+        )
+        self._send(_public_layout(str(row["title"]), content), "text/html; charset=utf-8")
+
     def _vulnerability(self, vulnerability_id: str) -> None:
         if not re.fullmatch(r"GCVE-[1-9][0-9]*-[0-9]{4}-[0-9]{4,19}", vulnerability_id, re.IGNORECASE):
             self._json({"error": "not found"}, 404)
@@ -206,8 +232,30 @@ class PublicHandler(BaseHTTPRequestHandler):
             return
         cna = record.get("containers", {}).get("cna", {})
         title = str(cna.get("title") or vulnerability_id.upper())
+        descriptions = cna.get("descriptions", []) if isinstance(cna, dict) else []
+        rendered_descriptions = "".join(
+            f'<section><h3>Description ({html.escape(str(item.get("lang") or "und"))})</h3>'
+            f'<pre>{html.escape(str(item.get("value") or ""))}</pre></section>'
+            for item in descriptions
+            if isinstance(item, dict) and item.get("value")
+        )
+        references = cna.get("references", []) if isinstance(cna, dict) else []
+        rendered_references = "".join(
+            f'<li><a href="{html.escape(str(item.get("url")), quote=True)}" rel="noreferrer">'
+            f'{html.escape(str(item.get("url")))}</a></li>'
+            for item in references
+            if isinstance(item, dict) and str(item.get("url") or "").startswith(("http://", "https://"))
+        )
+        human = rendered_descriptions
+        if rendered_references:
+            human += f'<section><h3>References</h3><ul>{rendered_references}</ul></section>'
         rendered = html.escape(json.dumps(record, ensure_ascii=False, indent=2))
-        self._send(_public_layout(title, f'<div class="panel"><h1>{html.escape(vulnerability_id.upper())}</h1><h2>{html.escape(title)}</h2><pre>{rendered}</pre></div>'), "text/html; charset=utf-8")
+        self._send(_public_layout(
+            title,
+            f'<div class="panel"><h1>{html.escape(vulnerability_id.upper())}</h1>'
+            f'<h2>{html.escape(title)}</h2>{human}'
+            f'<details><summary>Raw JSON</summary><pre>{rendered}</pre></details></div>',
+        ), "text/html; charset=utf-8")
 
 
 def serve(store: Store, bind: str = "127.0.0.1", port: int = 8766) -> None:

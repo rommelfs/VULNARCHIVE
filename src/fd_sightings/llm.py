@@ -11,6 +11,7 @@ from .models import Extraction, Message
 
 
 MODES = {"off", "shadow", "review", "automatic"}
+PROMPT_VERSION = "vulnerability-match-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,10 @@ class LLMDecision:
     model: str
     response_id: str
     input_sha256: str
+    output: dict[str, Any]
+    candidates: tuple[dict[str, Any], ...]
+    prompt_version: str = PROMPT_VERSION
+    provider: str = "openai-responses-compatible"
 
 
 class LLMMatcher:
@@ -39,13 +44,19 @@ class LLMMatcher:
 
     @classmethod
     def from_env(cls, client: Client) -> "LLMMatcher":
-        return cls(
+        matcher = cls(
             client,
             os.getenv("VA_LLM_API_URL", "https://api.openai.com/v1/responses"),
             os.getenv("OPENAI_API_KEY", ""),
             os.getenv("VA_LLM_MODEL", ""),
             os.getenv("VA_LLM_MODE", "off").strip().casefold(),
         )
+        if matcher.mode == "automatic":
+            from .evaluation import valid_automatic_gate
+            report = os.getenv("VA_MATCH_EVALUATION_REPORT", "")
+            if not report or not valid_automatic_gate(report, PROMPT_VERSION):
+                raise ValueError("automatic LLM mode requires a passing current VA_MATCH_EVALUATION_REPORT")
+        return matcher
 
     @property
     def enabled(self) -> bool:
@@ -75,7 +86,13 @@ class LLMMatcher:
             "body": message.body[:12000],
             "published": message.published,
             "product_hint": extraction.product_hint,
+            "vendor_hint": extraction.vendor_hint,
+            "component_hint": extraction.component_hint,
+            "product_aliases": extraction.product_aliases,
             "affected_versions": extraction.affected_versions,
+            "version_constraints": extraction.version_constraints,
+            "fixed_versions": extraction.fixed_versions,
+            "commits": extraction.commits,
             "vulnerability_types": extraction.vulnerability_types,
             "cwe_ids": extraction.cwe_ids,
         }
@@ -135,4 +152,5 @@ class LLMMatcher:
             tuple(str(value)[:1000] for value in result.get("contradictions", [])),
             tuple(str(value)[:1000] for value in result.get("missing_information", [])),
             self.model, str(response.get("id") or ""), digest,
+            dict(result), tuple(candidates),
         )

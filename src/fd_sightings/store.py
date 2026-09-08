@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .models import Extraction, Match, Message
+from .query import ListPage, ListQuery
 
 
 SCHEMA = """
@@ -35,6 +39,11 @@ CREATE TABLE IF NOT EXISTS observations (
     reviewed_at TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS sources (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS submissions (
     source_url TEXT NOT NULL,
     vulnerability_id TEXT NOT NULL,
@@ -43,6 +52,53 @@ CREATE TABLE IF NOT EXISTS submissions (
     submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (source_url, vulnerability_id, sighting_type)
 );
+CREATE TABLE IF NOT EXISTS review_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url TEXT NOT NULL,
+    review_state TEXT NOT NULL CHECK (review_state IN ('pending', 'approved', 'rejected')),
+    vulnerability_ids_json TEXT NOT NULL DEFAULT '[]',
+    sighting_type TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_url) REFERENCES observations(source_url) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS review_events_source_idx
+    ON review_events (source_url, event_id DESC);
+CREATE TABLE IF NOT EXISTS review_users (
+    username TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'reviewer')),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS review_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS analysis_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url TEXT NOT NULL,
+    trigger_name TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    input_sha256 TEXT NOT NULL DEFAULT '',
+    response_id TEXT NOT NULL DEFAULT '',
+    retrieval_at TEXT NOT NULL,
+    context_json TEXT NOT NULL DEFAULT '{}',
+    candidates_json TEXT NOT NULL DEFAULT '[]',
+    deterministic_json TEXT NOT NULL DEFAULT '[]',
+    excluded_json TEXT NOT NULL DEFAULT '[]',
+    llm_output_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_url) REFERENCES observations(source_url) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS analysis_events_source_idx
+    ON analysis_events (source_url, event_id DESC);
 CREATE TABLE IF NOT EXISTS automatic_publications (
     source_url TEXT NOT NULL,
     publication_key TEXT NOT NULL,
@@ -103,6 +159,77 @@ class Store:
         self.db.executescript(SCHEMA)
         self._migrate()
 
+    @staticmethod
+    def _password_hash(password: str) -> str:
+        if len(password) < 12:
+            raise ValueError("password must contain at least 12 characters")
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
+        return "pbkdf2_sha256$600000$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(digest).decode()
+
+    def save_review_user(self, username: str, password: str, role: str = "reviewer") -> None:
+        username = username.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.@-]{2,64}", username):
+            raise ValueError("username must contain 2-64 safe characters")
+        if role not in {"admin", "reviewer"}:
+            raise ValueError("invalid user role")
+        encoded = self._password_hash(password)
+        self.db.execute(
+            """INSERT INTO review_users(username,password_hash,role,active) VALUES(?,?,?,1)
+            ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash,
+            role=excluded.role, active=1, updated_at=CURRENT_TIMESTAMP""",
+            (username, encoded, role),
+        )
+        self.db.commit()
+
+    def authenticate_review_user(self, username: str, password: str) -> str | None:
+        row = self.db.execute(
+            "SELECT password_hash, role FROM review_users WHERE username=? AND active=1", (username,),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            algorithm, rounds, salt, expected = str(row[0]).split("$")
+            if algorithm != "pbkdf2_sha256":
+                return None
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), base64.b64decode(salt), int(rounds),
+            )
+            return str(row[1]) if hmac.compare_digest(actual, base64.b64decode(expected)) else None
+        except (ValueError, TypeError):
+            return None
+
+    def review_users(self) -> list[dict[str, object]]:
+        self.db.row_factory = sqlite3.Row
+        return [dict(row) for row in self.db.execute(
+            "SELECT username, role, active, created_at, updated_at FROM review_users ORDER BY username COLLATE NOCASE"
+        )]
+
+    def has_review_users(self) -> bool:
+        return self.db.execute("SELECT 1 FROM review_users WHERE active=1 LIMIT 1").fetchone() is not None
+
+    def set_review_user_active(self, username: str, active: bool) -> None:
+        cursor = self.db.execute(
+            "UPDATE review_users SET active=?, updated_at=CURRENT_TIMESTAMP WHERE username=?",
+            (int(active), username),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("review user not found")
+        self.db.commit()
+
+    def four_eyes_enabled(self) -> bool:
+        row = self.db.execute(
+            "SELECT setting_value FROM review_settings WHERE setting_key='four_eyes'"
+        ).fetchone()
+        return bool(row and row[0] == "1")
+
+    def set_four_eyes(self, enabled: bool) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO review_settings(setting_key, setting_value) VALUES('four_eyes', ?)",
+            ("1" if enabled else "0",),
+        )
+        self.db.commit()
+
     def _migrate(self) -> None:
         record_columns = {row[1] for row in self.db.execute("PRAGMA table_info(gcve_records)")}
         if "vuln_id" not in record_columns:
@@ -136,6 +263,8 @@ class Store:
         """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(observations)")}
         additions = {
+            "source_id": "TEXT NOT NULL DEFAULT 'full-disclosure'",
+            "canonical_key": "TEXT NOT NULL DEFAULT ''",
             "review_state": "TEXT NOT NULL DEFAULT 'pending'",
             "reviewed_vulnerability_id": "TEXT NOT NULL DEFAULT ''",
             "reviewed_vulnerability_ids_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -149,10 +278,42 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        # Pilot-era/manual databases may contain truncated JSON values. One
+        # malformed row must not make the complete review queue return an empty
+        # connection when JSON1 computes confidence values.
+        for column, fallback in (
+            ("links_json", "[]"), ("extraction_json", "{}"),
+            ("matches_json", "[]"), ("reviewed_vulnerability_ids_json", "[]"),
+        ):
+            self.db.execute(
+                f"UPDATE observations SET {column}=? WHERE NOT json_valid({column})",
+                (fallback,),
+            )
+        self.db.execute("UPDATE observations SET canonical_key=source_url WHERE canonical_key='' ")
+        self.db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS observations_source_key_idx "
+            "ON observations(source_id, canonical_key)"
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO sources(source_id, name) VALUES ('full-disclosure', 'Full Disclosure')"
+        )
         self.db.execute(
             """UPDATE observations SET reviewed_vulnerability_ids_json=json_array(reviewed_vulnerability_id)
             WHERE reviewed_vulnerability_id<>'' AND reviewed_vulnerability_ids_json='[]'"""
         )
+        self.db.execute(
+            """INSERT INTO review_events
+            (source_url, review_state, vulnerability_ids_json, sighting_type, note, actor, created_at)
+            SELECT o.source_url, o.review_state, o.reviewed_vulnerability_ids_json,
+                   o.reviewed_sighting_type, o.review_note, 'legacy-migration',
+                   COALESCE(o.reviewed_at, o.updated_at)
+            FROM observations o
+            WHERE o.reviewed_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM review_events e WHERE e.source_url=o.source_url)"""
+        )
+        analysis_columns = {row[1] for row in self.db.execute("PRAGMA table_info(analysis_events)")}
+        if "excluded_json" not in analysis_columns:
+            self.db.execute("ALTER TABLE analysis_events ADD COLUMN excluded_json TEXT NOT NULL DEFAULT '[]'")
         publication_columns = {row[1] for row in self.db.execute("PRAGMA table_info(automatic_publications)")}
         for name in ("reserved_at", "published_at"):
             if name not in publication_columns:
@@ -171,6 +332,27 @@ class Store:
                     normalized,
                     rowid,
                 ),
+            )
+        # Older publication paths could commit the durable ledger without
+        # populating the canonical table consumed by the public detail route.
+        # Recover valid published payloads so a "Published" link cannot lead to
+        # a 404 merely because the two projections predate the atomic writer.
+        for source_url, gcve_id, payload_json, reserved, published, updated in self.db.execute(
+            """SELECT source_url, gcve_id, payload_json, reserved_at, published_at, updated_at
+            FROM automatic_publications p
+            WHERE kind='gcve' AND status='published' AND gcve_id<>''
+              AND NOT EXISTS (SELECT 1 FROM gcve_records r WHERE r.vuln_id=p.gcve_id)"""
+        ).fetchall():
+            try:
+                record = json.loads(str(payload_json))
+                if not isinstance(record, dict) or self._record_id(record) != str(gcve_id).upper():
+                    continue
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            timestamp = str(published or updated or reserved or self._utc_now())
+            self._insert_canonical_record(
+                str(gcve_id), str(source_url), record,
+                str(reserved or timestamp), str(published or timestamp), str(updated or timestamp),
             )
         self.db.commit()
         self._setup_full_text_index()
@@ -436,7 +618,17 @@ class Store:
     def seen(self, source_url: str) -> bool:
         return self.db.execute("SELECT 1 FROM observations WHERE source_url = ?", (source_url,)).fetchone() is not None
 
-    def save(self, message: Message, extraction: Extraction, matches: list[Match]) -> None:
+    def save(
+        self, message: Message, extraction: Extraction, matches: list[Match], *,
+        analysis: dict[str, object] | None = None, analysis_trigger: str = "import",
+    ) -> None:
+        canonical_key = message.message_id.strip().casefold() or message.source_url
+        existing = self.db.execute(
+            "SELECT source_url FROM observations WHERE source_id=? AND canonical_key=?",
+            (message.source_id, canonical_key),
+        ).fetchone()
+        if existing:
+            message.source_url = str(existing[0])
         canonical_source = message.raw_source or (message.title + "\n" + message.body)
         digest = hashlib.sha256(canonical_source.encode()).hexdigest()
         status = "matched" if matches else "unmatched"
@@ -467,6 +659,16 @@ class Store:
                 status,
             ),
         )
+        self.db.execute(
+            "UPDATE observations SET source_id=?, canonical_key=? WHERE source_url=?",
+            (message.source_id, canonical_key, message.source_url),
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO sources(source_id, name) VALUES (?, ?)",
+            (message.source_id, message.source_id.replace("-", " ").title()),
+        )
+        if analysis is not None:
+            self._insert_analysis_event(message.source_url, analysis_trigger, analysis)
         self.db.commit()
 
     def record_submission(self, source_url: str, vulnerability_id: str, sighting_type: str, response: object) -> None:
@@ -478,8 +680,16 @@ class Store:
 
     def _decode(self, row: sqlite3.Row, include_body: bool = False) -> dict[str, object]:
         item = dict(row)
+        fallbacks: dict[str, object] = {
+            "links_json": [], "extraction_json": {}, "matches_json": [],
+            "reviewed_vulnerability_ids_json": [],
+        }
         for key in ("links_json", "extraction_json", "matches_json", "reviewed_vulnerability_ids_json"):
-            item[key.removesuffix("_json")] = json.loads(str(item.pop(key)))
+            encoded = str(item.pop(key))
+            try:
+                item[key.removesuffix("_json")] = json.loads(encoded)
+            except json.JSONDecodeError:
+                item[key.removesuffix("_json")] = fallbacks[key]
         if not include_body:
             item.pop("body", None)
             item.pop("raw_source", None)
@@ -500,6 +710,66 @@ class Store:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY published DESC, source_url DESC"
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
+
+    def observation_page(self, request: ListQuery) -> ListPage:
+        """Return one stable, SQL-paginated observation collection."""
+        tokens = re.findall(r"[^\W_]+", request.search, re.UNICODE)[:12]
+        if request.search and not tokens:
+            return ListPage([], 0, request.page, request.per_page)
+        joins = ""
+        clauses: list[str] = []
+        params: list[object] = []
+        rank = ""
+        confidence = (
+            "COALESCE((SELECT MAX(CAST(json_extract(value, '$.confidence') AS REAL)) "
+            "FROM json_each(CASE WHEN json_valid(o.matches_json) "
+            "THEN o.matches_json ELSE '[]' END)), 0)"
+        )
+        if tokens and self.fts_enabled:
+            joins = " JOIN observations_fts ON observations_fts.source_url=o.source_url"
+            clauses.append("observations_fts MATCH ?")
+            params.append(" AND ".join(f'"{token}"*' for token in tokens))
+            rank = ", bm25(observations_fts, 0.0, 5.0, 2.0, 1.0, 3.0) AS search_rank"
+        elif tokens:
+            needle = "%" + " ".join(tokens) + "%"
+            clauses.append("(o.title LIKE ? OR o.author LIKE ? OR o.body LIKE ? OR o.extraction_json LIKE ?)")
+            params.extend((needle, needle, needle, needle))
+        if request.status:
+            clauses.append("o.status = ?")
+            params.append(request.status)
+        if request.review_state:
+            clauses.append("o.review_state = ?")
+            params.append(request.review_state)
+        if request.confidence_min > 0:
+            clauses.append(f"{confidence} >= ?")
+            params.append(request.confidence_min)
+        if request.confidence_max < 1:
+            clauses.append(f"{confidence} <= ?")
+            params.append(request.confidence_max)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        total = int(self.db.execute("SELECT COUNT(*) FROM observations o" + joins + where, params).fetchone()[0])
+        sort_columns = {
+            "published": "o.published", "title": "o.title COLLATE NOCASE",
+            "author": "o.author COLLATE NOCASE", "status": "o.status",
+            "review": "o.review_state", "confidence": confidence,
+        }
+        direction = request.order.upper()
+        primary = "search_rank ASC, " if tokens and self.fts_enabled and request.sort == "published" else ""
+        order = f" ORDER BY {primary}{sort_columns[request.sort]} {direction}, o.source_url {direction}"
+        select = f"SELECT o.*, {confidence} AS max_confidence{rank} FROM observations o"
+        page_params = [*params, request.per_page, (request.page - 1) * request.per_page]
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(select + joins + where + order + " LIMIT ? OFFSET ?", page_params)
+        return ListPage([self._decode(row) for row in rows], total, request.page, request.per_page)
+
+    def review_counts(self) -> dict[str, int]:
+        counts = {"pending": 0, "approved": 0, "rejected": 0}
+        for state, count in self.db.execute(
+            "SELECT review_state, COUNT(*) FROM observations GROUP BY review_state"
+        ):
+            if state in counts:
+                counts[str(state)] = int(count)
+        return counts
 
     def search_rows(
         self, query: str, status: str | None = None, review_state: str | None = None,
@@ -544,9 +814,9 @@ class Store:
 
     def published_gcve_for_source(self, source_url: str) -> str:
         row = self.db.execute(
-            "SELECT gcve_id FROM automatic_publications "
-            "WHERE source_url=? AND kind='gcve' AND status='published' AND gcve_id<>'' "
-            "ORDER BY published_at DESC LIMIT 1", (source_url,),
+            "SELECT p.gcve_id FROM automatic_publications p JOIN gcve_records r ON r.vuln_id=p.gcve_id "
+            "WHERE p.source_url=? AND p.kind='gcve' AND p.status='published' AND p.gcve_id<>'' "
+            "ORDER BY p.published_at DESC LIMIT 1", (source_url,),
         ).fetchone()
         return str(row[0]) if row else ""
 
@@ -559,10 +829,18 @@ class Store:
         row = self.db.execute("SELECT * FROM observations WHERE source_url = ?", (source_url,)).fetchone()
         return self._decode(row, include_body=True) if row else None
 
+    def get_by_content_hash(self, content_hash: str) -> dict[str, object] | None:
+        self.db.row_factory = sqlite3.Row
+        row = self.db.execute(
+            "SELECT * FROM observations WHERE content_hash=? ORDER BY source_url LIMIT 1",
+            (content_hash,),
+        ).fetchone()
+        return self._decode(row, include_body=True) if row else None
+
     def review(
         self, source_url: str, state: str,
         vulnerability_ids: str | list[str] | tuple[str, ...] = (),
-        sighting_type: str = "", note: str = "",
+        sighting_type: str = "", note: str = "", *, actor: str = "",
     ) -> None:
         if state not in {"pending", "approved", "rejected"}:
             raise ValueError("invalid review state")
@@ -570,14 +848,148 @@ class Store:
         identifiers = list(dict.fromkeys(value.strip().upper() for value in candidates if value.strip()))
         if state == "approved" and sighting_type not in {"seen", "published-proof-of-concept"}:
             raise ValueError("approved observations require a valid sighting type")
+        projected_state = self._projected_review_state(source_url, state, actor)
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            cursor = self.db.execute(
+                """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
+                reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
+                WHERE source_url=?""",
+                (projected_state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                 sighting_type, note[:2000], source_url),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("observation not found")
+            self._record_review_event(source_url, state, identifiers, sighting_type, note, actor)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def review_many(
+        self, source_urls: list[str], state: str, note: str = "", *, actor: str = "",
+    ) -> int:
+        """Apply one review decision to a bounded set of explicitly selected rows."""
+        sources = list(dict.fromkeys(value for value in source_urls if value))
+        if not sources or len(sources) > 100:
+            raise ValueError("select between 1 and 100 observations")
+        if state not in {"approved", "rejected", "pending"}:
+            raise ValueError("invalid bulk review state")
+        updated = 0
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            for source_url in sources:
+                row = self.get(source_url)
+                if not row:
+                    continue
+                extraction = dict(row.get("extraction") or {})
+                matches = list(row.get("matches") or [])
+                identifiers = list(dict.fromkeys(
+                    str(match.get("vulnerability_id") or "").strip().upper()
+                    for match in matches if isinstance(match, dict) and match.get("vulnerability_id")
+                )) if state == "approved" else []
+                sighting_type = str(extraction.get("proposed_type") or "seen") if state == "approved" else ""
+                if sighting_type not in {"seen", "published-proof-of-concept"}:
+                    sighting_type = "seen"
+                projected_state = self._projected_review_state(source_url, state, actor)
+                cursor = self.db.execute(
+                    """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?,
+                    reviewed_vulnerability_ids_json=?, reviewed_sighting_type=?, review_note=?,
+                    reviewed_at=CURRENT_TIMESTAMP WHERE source_url=?""",
+                    (projected_state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                     sighting_type, note[:2000], source_url),
+                )
+                updated += cursor.rowcount
+                self._record_review_event(source_url, state, identifiers, sighting_type, note, actor)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return updated
+
+    def _projected_review_state(self, source_url: str, requested: str, actor: str) -> str:
+        if requested != "approved" or not self.four_eyes_enabled():
+            return requested
+        if not actor:
+            raise ValueError("four-eyes approval requires an authenticated reviewer")
+        barrier = self.db.execute(
+            """SELECT COALESCE(MAX(event_id), 0) FROM review_events
+            WHERE source_url=? AND review_state<>'approved'""", (source_url,),
+        ).fetchone()[0]
+        prior = self.db.execute(
+            """SELECT 1 FROM review_events WHERE source_url=? AND review_state='approved'
+            AND event_id>? AND actor<>? AND actor<>'' LIMIT 1""", (source_url, barrier, actor),
+        ).fetchone()
+        return "approved" if prior else "pending"
+
+    def _record_review_event(
+        self, source_url: str, state: str, identifiers: list[str],
+        sighting_type: str, note: str, actor: str,
+    ) -> None:
         self.db.execute(
-            """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
-            reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
-            WHERE source_url=?""",
-            (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
-             sighting_type, note[:2000], source_url),
+            """INSERT INTO review_events
+            (source_url, review_state, vulnerability_ids_json, sighting_type, note, actor)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (source_url, state, json.dumps(identifiers), sighting_type, note[:2000], actor[:200]),
         )
+
+    def review_events(self, source_url: str) -> list[dict[str, object]]:
+        """Return the immutable decision history, newest event first."""
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            """SELECT event_id, review_state, vulnerability_ids_json, sighting_type,
+                      note, actor, created_at
+            FROM review_events WHERE source_url=? ORDER BY event_id DESC""",
+            (source_url,),
+        )
+        events = []
+        for row in rows:
+            event = dict(row)
+            event["vulnerability_ids"] = json.loads(str(event.pop("vulnerability_ids_json")))
+            events.append(event)
+        return events
+
+    def record_analysis_event(self, source_url: str, trigger_name: str, analysis: dict[str, object]) -> None:
+        """Persist one immutable matching run after its observation projection."""
+        self._insert_analysis_event(source_url, trigger_name, analysis)
         self.db.commit()
+
+    def _insert_analysis_event(self, source_url: str, trigger_name: str, analysis: dict[str, object]) -> None:
+        self.db.execute(
+            """INSERT INTO analysis_events
+            (source_url, trigger_name, provider, model, prompt_version, input_sha256,
+             response_id, retrieval_at, context_json, candidates_json, deterministic_json,
+             excluded_json, llm_output_json, result_json, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                source_url, trigger_name, str(analysis.get("provider") or ""),
+                str(analysis.get("model") or ""), str(analysis.get("prompt_version") or ""),
+                str(analysis.get("input_sha256") or ""), str(analysis.get("response_id") or ""),
+                str(analysis.get("retrieval_at") or self._utc_now()),
+                json.dumps({"semantic": analysis.get("semantic"), "explicit_ids": analysis.get("explicit_ids") or []}),
+                json.dumps(analysis.get("candidates") or []),
+                json.dumps(analysis.get("deterministic_matches") or []),
+                json.dumps(analysis.get("excluded_candidates") or []),
+                json.dumps(analysis.get("llm_output") or {}),
+                json.dumps(analysis.get("result") or []), str(analysis.get("error") or "")[:2000],
+            ),
+        )
+
+    def analysis_events(self, source_url: str, limit: int = 20) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("analysis event limit must be between 1 and 100")
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            "SELECT * FROM analysis_events WHERE source_url=? ORDER BY event_id DESC LIMIT ?",
+            (source_url, limit),
+        )
+        events = []
+        for row in rows:
+            event = dict(row)
+            for name in ("context_json", "candidates_json", "deterministic_json", "excluded_json", "llm_output_json", "result_json"):
+                event[name.removesuffix("_json")] = json.loads(str(event.pop(name)))
+            events.append(event)
+        return events
 
     def approved(self, limit: int = 0) -> list[dict[str, object]]:
         self.db.row_factory = sqlite3.Row
