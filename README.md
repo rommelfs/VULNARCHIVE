@@ -105,7 +105,12 @@ VA_SOURCES=full-disclosure,bugtraq
 
 The authenticated review UI exposes the same selection under **Archive
 imports**. Its Full Disclosure and Bugtraq checkboxes default to `VA_SOURCES`
-and are recorded with each worker job.
+and are recorded with each worker job. The page also displays the unattended
+configuration currently loaded by the review service. It intentionally cannot
+edit `/etc/vulnarchive/vulnarchive.env` or run `systemctl`: that file is
+root-owned and service control remains an operator action. The upgrade script
+validates `VA_SOURCES`, warns when it is missing, and applies environment changes
+when it restarts services that were active before the upgrade.
 
 For the continuous Phase-2 operation, import the current feed and immediately apply the automatic publication policy in one idempotent run:
 

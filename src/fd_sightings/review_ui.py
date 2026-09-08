@@ -244,7 +244,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             f'{"checked" if source_id in enabled_sources else ""}> {_e(adapter.name)}</label>'
             for source_id, adapter in SOURCES.items()
         )
-        content = f'''<div class="panel"><h1>Historical archive imports</h1>
+        unattended = ", ".join(SOURCES[source_id].name for source_id in enabled_sources)
+        content = f'''<div class="panel"><h1>Import source configuration</h1>
+<p>Unattended RSS/sync sources currently loaded by this service: <strong>{_e(unattended)}</strong>.</p>
+<p class="muted">The checkboxes below apply only to the new historical worker. To change unattended sync, set <code>VA_SOURCES</code> in <code>/etc/vulnarchive/vulnarchive.env</code> and restart <code>vulnarchive-review.service</code> and <code>vulnarchive-sync.timer</code>. The web service deliberately cannot edit the root-owned environment file or invoke systemctl.</p></div>
+<div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
 <p class="muted">Use the calendar controls to select complete archive months. Future months cannot be queued.</p>

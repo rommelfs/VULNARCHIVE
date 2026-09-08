@@ -129,6 +129,9 @@ class ReviewUITest(unittest.TestCase):
         self.assertEqual(page.count('type="month"'), 2)
         self.assertEqual(page.count('min="2002-01" max="'), 2)
         self.assertIn("Use the calendar controls", page)
+        self.assertIn("Import source configuration", page)
+        self.assertIn("only to the new historical worker", page)
+        self.assertIn("deliberately cannot edit", page)
         self.assertIn('name="source" value="full-disclosure" checked', page)
         self.assertIn('name="source" value="bugtraq"', page)
 
