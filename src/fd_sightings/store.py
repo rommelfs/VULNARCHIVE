@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS observations (
     reviewed_at TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS sources (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS submissions (
     source_url TEXT NOT NULL,
     vulnerability_id TEXT NOT NULL,
@@ -137,6 +142,8 @@ class Store:
         """)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(observations)")}
         additions = {
+            "source_id": "TEXT NOT NULL DEFAULT 'full-disclosure'",
+            "canonical_key": "TEXT NOT NULL DEFAULT ''",
             "review_state": "TEXT NOT NULL DEFAULT 'pending'",
             "reviewed_vulnerability_id": "TEXT NOT NULL DEFAULT ''",
             "reviewed_vulnerability_ids_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -150,6 +157,14 @@ class Store:
         for name, definition in additions.items():
             if name not in columns:
                 self.db.execute(f"ALTER TABLE observations ADD COLUMN {name} {definition}")
+        self.db.execute("UPDATE observations SET canonical_key=source_url WHERE canonical_key='' ")
+        self.db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS observations_source_key_idx "
+            "ON observations(source_id, canonical_key)"
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO sources(source_id, name) VALUES ('full-disclosure', 'Full Disclosure')"
+        )
         self.db.execute(
             """UPDATE observations SET reviewed_vulnerability_ids_json=json_array(reviewed_vulnerability_id)
             WHERE reviewed_vulnerability_id<>'' AND reviewed_vulnerability_ids_json='[]'"""
@@ -438,6 +453,13 @@ class Store:
         return self.db.execute("SELECT 1 FROM observations WHERE source_url = ?", (source_url,)).fetchone() is not None
 
     def save(self, message: Message, extraction: Extraction, matches: list[Match]) -> None:
+        canonical_key = message.message_id.strip().casefold() or message.source_url
+        existing = self.db.execute(
+            "SELECT source_url FROM observations WHERE source_id=? AND canonical_key=?",
+            (message.source_id, canonical_key),
+        ).fetchone()
+        if existing:
+            message.source_url = str(existing[0])
         canonical_source = message.raw_source or (message.title + "\n" + message.body)
         digest = hashlib.sha256(canonical_source.encode()).hexdigest()
         status = "matched" if matches else "unmatched"
@@ -467,6 +489,14 @@ class Store:
                 json.dumps([match.as_dict() for match in matches]),
                 status,
             ),
+        )
+        self.db.execute(
+            "UPDATE observations SET source_id=?, canonical_key=? WHERE source_url=?",
+            (message.source_id, canonical_key, message.source_url),
+        )
+        self.db.execute(
+            "INSERT OR IGNORE INTO sources(source_id, name) VALUES (?, ?)",
+            (message.source_id, message.source_id.replace("-", " ").title()),
         )
         self.db.commit()
 
@@ -611,6 +641,14 @@ class Store:
     def get(self, source_url: str) -> dict[str, object] | None:
         self.db.row_factory = sqlite3.Row
         row = self.db.execute("SELECT * FROM observations WHERE source_url = ?", (source_url,)).fetchone()
+        return self._decode(row, include_body=True) if row else None
+
+    def get_by_content_hash(self, content_hash: str) -> dict[str, object] | None:
+        self.db.row_factory = sqlite3.Row
+        row = self.db.execute(
+            "SELECT * FROM observations WHERE content_hash=? ORDER BY source_url LIMIT 1",
+            (content_hash,),
+        ).fetchone()
         return self._decode(row, include_body=True) if row else None
 
     def review(

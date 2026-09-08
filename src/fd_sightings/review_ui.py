@@ -392,7 +392,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         evidence = "".join(f"<li>{_e(item)}</li>" for item in extraction.get("poc_evidence", []))
         content = f"""<p><a href="/">← Queue</a></p><div class="grid"><section>
 <div class="panel"><h1>{_e(row['title'])}</h1><p class="muted">{_e(row['author'])} · {_e(row['published'])}</p>
-<p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open Full Disclosure source</a></p>
+<p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open original source</a> · {_e(row.get('source_id', 'full-disclosure'))}</p>
 <h3>Extraction</h3><p>Product: <strong>{_e(extraction.get('product_hint',''))}</strong> · Proposed type: <strong>{_e(extraction.get('proposed_type',''))}</strong> · PoC score: <strong>{_e(extraction.get('poc_score',0))}</strong></p><ul>{evidence or '<li>No PoC indicators</li>'}</ul>
 <h3>Candidate analysis</h3><ul>{match_analysis or '<li>No candidates</li>'}</ul>
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>

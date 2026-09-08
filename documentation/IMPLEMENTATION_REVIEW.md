@@ -12,7 +12,7 @@ Betriebsdokumentation im Repository. Die Statusangaben bedeuten:
 
 | Nr. | Anforderung | Status | Wesentliche Lücke |
 |---:|---|---|---|
-| 1 | Mehrere Quellen | **Offen** | Import, Parser, CLI und URLs sind auf Full Disclosure zugeschnitten. |
+| 1 | Mehrere Quellen | **Teilweise** | Full Disclosure und Bugtraq sind auswählbar; weitere Adapter und quellenübergreifende Provenienz bleiben offen. |
 | 2 | Automatische Publikation als GNA 1988 | **Erfüllt** | Vor Produktion bleiben Policy-Abnahme und Ende-zu-Ende-Abnahmetest erforderlich. |
 | 3 | CVE-Abgleich und LLM-Aufwertung | **Teilweise** | Pipeline existiert, aber Extraktion, Retrieval, Audit-Trail und Evaluation sind noch zu schmal. |
 | 4 | Manuelles Approval bei Mehrdeutigkeit | **Teilweise** | Fachlicher Workflow existiert; Queue-Betrieb, Historie und Zustandsmodell müssen gehärtet werden. |
@@ -23,21 +23,19 @@ Betriebsdokumentation im Repository. Die Statusangaben bedeuten:
 
 ## Detailprüfung
 
-### 1. Mehrere Quellen — offen
+### 1. Mehrere Quellen — teilweise
 
-Das Domänenmodell bezeichnet eine Quelle nur durch `source_url`; eine stabile
-`source_id`, einen Quellentyp und quellenspezifische Fremdschlüssel gibt es nicht.
-CLI-Defaults, Monatsimport, RSS-Import und HTML-Parser bilden ausschließlich die
-Seclists-Darstellung von Full Disclosure ab. Auch öffentliche und administrative
-Detail-URLs erkennen nur `/archive/full-disclosure/`. Ein beliebiger Aufruf von
-`url` ist deshalb **keine** echte Multi-Source-Unterstützung: der Inhalt wird
-weiter mit dem Full-Disclosure-Parser interpretiert.
+Ein Source-Adapter-Vertrag und eine Registry für Full Disclosure und Bugtraq sind
+inzwischen vorhanden. RSS-, Sync- und Monatsimport akzeptieren wiederholbare
+`--source`-Optionen. Beobachtungen speichern `source_id` und einen kanonischen,
+pro Quelle eindeutigen Schlüssel; Message-ID verhindert Duplikate desselben
+Beitrags unter einer zweiten URL. Generische, hashbasierte Archivdetailseiten
+entfernen die frühere Full-Disclosure-Annahme aus öffentlichen Links.
 
-Bugtraq oder weitere Listen benötigen ein Adaptermodell für Discovery, Fetching,
-Parsing und kanonische Identität. Deduplizierung darf dann nicht allein über die
-URL erfolgen: Spiegel und migrierte Archive können dieselbe Message-ID unter
-verschiedenen URLs führen. Für bestehende Daten ist eine rückwärtskompatible
-Migration mit `source_id='full-disclosure'` nötig.
+Noch fehlen Adapter für Archive außerhalb des gemeinsamen Seclists-HTML-Formats,
+quellenübergreifende Provenienz für denselben Beitrag, Checkpoints pro Quelle und
+Source-Filter/Gruppierung in allen Collections. Bestehende Daten werden
+rückwärtskompatibel auf `source_id='full-disclosure'` migriert.
 
 ### 2. Automatische Publikation als GNA 1988 — erfüllt
 
@@ -181,6 +179,9 @@ Der erste vertikale Schnitt aus Phase 1 und Phase 4 ist umgesetzt: Ein
 validiertes `ListQuery` kapselt Filter, Sortierung, Richtung und Seitengröße. Die
 Review-Queue verwendet DB-seitiges Counting und Pagination, stabile Sortierung
 mit Allowlist sowie sortierbare Spalten für Titel, Confidence und Review-Status.
+Der erste Schnitt aus Phase 2 ist ebenfalls umgesetzt: Source-Registry,
+Full-Disclosure-/Bugtraq-Adapter, wiederholbare CLI-Quellenauswahl, additive
+Source-Migration, Message-ID-Deduplizierung und generische Archivdetailrouten.
 Die bestehenden Store-Methoden bleiben vorerst kompatibel, damit die weiteren
 Collections einzeln und ohne Big-Bang-Umstellung migriert werden können.
 

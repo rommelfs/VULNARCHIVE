@@ -14,6 +14,7 @@ The GCVE Best Current Practices supplied with this repository are indexed in
 
 - Historical import by archive month or period
 - Continuous import from the official RSS feed
+- Repeatable source selection for Full Disclosure and Bugtraq
 - SQLite checkpoints and idempotent re-runs
 - Original source retention with SHA-256, format, and Message-ID when available
 - CVE, GCVE, GHSA, CWE, and CVSS extraction
@@ -81,6 +82,18 @@ Process the current feed. Repeated runs skip URLs already stored:
 ```sh
 fd-sightings rss
 ```
+
+Import both configured Seclists sources. `--source` is repeatable for `rss`,
+`sync`, and `archive`; omitting it keeps the Full Disclosure default:
+
+```sh
+fd-sightings rss --source full-disclosure --source bugtraq
+fd-sightings archive --source bugtraq --from-period 2020-01 --to-period 2020-12
+```
+
+Source adapters own discovery and parsing. Observations retain a stable source
+identifier and use Message-ID as their per-source canonical key when available,
+so a second mirror URL does not create a duplicate observation.
 
 For the continuous Phase-2 operation, import the current feed and immediately apply the automatic publication policy in one idempotent run:
 
