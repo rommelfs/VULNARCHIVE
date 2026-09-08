@@ -16,6 +16,16 @@ from .workers import ImportWorkerManager
 from .sources import SOURCES, configured_source_ids
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
+REVIEW_JAVASCRIPT = b"""'use strict';
+document.querySelectorAll('[data-range-output]').forEach(function (slider) {
+  var output = document.getElementById(slider.dataset.rangeOutput);
+  var update = function () {
+    output.textContent = Number(slider.value).toFixed(2);
+  };
+  slider.addEventListener('input', update);
+  update();
+});
+"""
 
 
 def _e(value: object) -> str:
@@ -40,7 +50,7 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px
 .grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}label{{display:block;font-weight:600;margin:12px 0 5px}}textarea{{width:100%;min-height:90px}}
 .range-filter{{display:grid;grid-template-columns:auto minmax(120px,1fr);gap:2px 8px;align-items:center;padding:4px 8px;border:1px solid #aaa;border-radius:6px}}.range-filter label{{margin:0;font-size:12px}}.range-filter input{{padding:0;border:0}}
 @media(max-width:800px){{.grid{{grid-template-columns:1fr}}table{{display:block;overflow:auto}}}}
-</style></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main id="content" style="display:block;visibility:visible;opacity:1">{content}</main></body></html>"""
+</style><script src="/review.js" defer></script></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main id="content" style="display:block;visibility:visible;opacity:1">{content}</main></body></html>"""
     return page.encode("utf-8")
 
 
@@ -76,6 +86,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             page = body.decode("utf-8")
             page = page.replace('href="/', f'href="{self.server.url_prefix}/')
             page = page.replace('action="/', f'action="{self.server.url_prefix}/')
+            page = page.replace('src="/', f'src="{self.server.url_prefix}/')
             body = page.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -83,7 +94,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-VULNARCHIVE-View", "review")
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -131,7 +142,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == "/":
+        if parsed.path == "/review.js":
+            self._send(REVIEW_JAVASCRIPT, content_type="text/javascript; charset=utf-8")
+        elif parsed.path == "/":
             self._index(params)
         elif parsed.path == "/observation":
             self._detail(params.get("source", [""])[0])
@@ -417,8 +430,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), request.review_state)}</select>
 <select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), request.status)}</select>
 <div class="range-filter" role="group" aria-label="Confidence range">
-<label for="confidence-min">Confidence min: {_e(f'{request.confidence_min:.2f}')}</label><input id="confidence-min" type="range" name="confidence_min" min="0" max="1" step="0.01" value="{_e(request.confidence_min)}">
-<label for="confidence-max">Confidence max: {_e(f'{request.confidence_max:.2f}')}</label><input id="confidence-max" type="range" name="confidence_max" min="0" max="1" step="0.01" value="{_e(request.confidence_max)}"></div>
+<label for="confidence-min">Confidence min: <output id="confidence-min-value" for="confidence-min">{_e(f'{request.confidence_min:.2f}')}</output></label><input id="confidence-min" data-range-output="confidence-min-value" type="range" name="confidence_min" min="0" max="1" step="0.01" value="{_e(request.confidence_min)}">
+<label for="confidence-max">Confidence max: <output id="confidence-max-value" for="confidence-max">{_e(f'{request.confidence_max:.2f}')}</output></label><input id="confidence-max" data-range-output="confidence-max-value" type="range" name="confidence_max" min="0" max="1" step="0.01" value="{_e(request.confidence_max)}"></div>
 <input type="hidden" name="sort" value="{_e(request.sort)}"><input type="hidden" name="order" value="{_e(request.order)}"><button>Filter</button></form></div>
 <form method="post" action="/bulk-review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
 <div class="panel"><div class="toolbar"><strong>Bulk review:</strong><button name="action" value="approve">Approve selected</button><button name="action" value="approve-page">Approve all shown ({len(rows)})</button><button class="danger" name="action" value="reject">Reject selected</button><button class="secondary" name="action" value="reset">Reset selected</button></div>

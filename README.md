@@ -157,6 +157,8 @@ minimum/maximum confidence sliders, select individual rows, or use **Approve all
 approve the current page (up to 100 observations per request). Bulk approval
 retains all candidate IDs for each row and uses its proposed Sighting type;
 publication remains a separate action.
+The values beside both sliders update immediately while they are moved; submit
+**Filter** to apply the selected inclusive interval to the queue.
 
 Every manual or bulk decision is also written to an append-only review history.
 The observation detail page shows the decision time, authenticated reviewer,

@@ -87,9 +87,16 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("Page 1 of 2 · 3 observations", page)
         self.assertIn('rel="next"', page)
         self.assertIn("sort=confidence", page)
-        self.assertIn("Confidence min: 0.00", page)
-        self.assertIn("Confidence max: 1.00", page)
+        self.assertIn('id="confidence-min-value" for="confidence-min">0.00</output>', page)
+        self.assertIn('id="confidence-max-value" for="confidence-max">1.00</output>', page)
         self.assertEqual(page.count('type="range"'), 2)
+        self.assertIn('src="/review/review.js"', page)
+        self.assertIn('data-range-output="confidence-min-value"', page)
+        with urllib.request.urlopen(self.request("/review.js")) as response:
+            script = response.read().decode()
+            self.assertEqual(response.headers.get_content_type(), "text/javascript")
+        self.assertIn("addEventListener('input', update)", script)
+        self.assertIn("toFixed(2)", script)
         ranged_query = urllib.parse.urlencode({"confidence_min": ".45", "confidence_max": ".75"})
         with urllib.request.urlopen(self.request("/?" + ranged_query)) as response:
             ranged = response.read().decode()
