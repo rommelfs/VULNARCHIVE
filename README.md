@@ -152,7 +152,11 @@ fd-sightings review
 In production, set `VA_REVIEW_BIND=10.205.22.135` and expose it through the authenticated reverse-proxy path at `https://vuln.freearchive.org/review/`. The CLI still
 defaults to localhost when it is started outside the supplied systemd unit. The
 interface supports queue filters, source evidence, match overrides, approval,
-rejection, and review notes.
+rejection, review notes, and bounded bulk review. Filter the queue by
+**Confidence 1.000**, select individual rows, or use **Approve all shown** to
+approve the current page (up to 100 observations per request). Bulk approval
+retains all candidate IDs for each row and uses its proposed Sighting type;
+publication remains a separate action.
 
 The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 

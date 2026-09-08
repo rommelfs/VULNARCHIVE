@@ -17,6 +17,7 @@ class ListQuery:
     search: str = ""
     status: str = ""
     review_state: str = ""
+    confidence: str = ""
 
     def __post_init__(self) -> None:
         if self.page < 1:
@@ -33,6 +34,8 @@ class ListQuery:
             raise ValueError("match is not supported")
         if self.review_state not in {"", "pending", "approved", "rejected"}:
             raise ValueError("review is not supported")
+        if self.confidence not in {"", "1"}:
+            raise ValueError("confidence is not supported")
 
 
 @dataclass(frozen=True, slots=True)

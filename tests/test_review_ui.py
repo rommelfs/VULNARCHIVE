@@ -87,6 +87,49 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("Page 1 of 2 · 3 observations", page)
         self.assertIn('rel="next"', page)
         self.assertIn("sort=confidence", page)
+        self.assertIn("Confidence 1.000", page)
+        self.assertIn("Approve selected", page)
+        self.assertIn("Approve all shown (2)", page)
+        self.assertEqual(page.count('type="checkbox" name="source"'), 2)
+
+    def test_bulk_approval_updates_explicitly_selected_rows(self) -> None:
+        from fd_sightings.models import Match
+        selected = []
+        for number in range(3):
+            source = f"https://example.test/bulk/{number}"
+            self.store.save(
+                Message(source, f"Bulk {number}"),
+                Extraction(relevant=True),
+                [Match(f"CVE-2026-{number + 1000}", "explicit-id", 1.0)],
+            )
+            selected.append(source)
+        encoded = urllib.parse.urlencode({
+            "csrf": self.server.csrf_token,
+            "source": selected[:2],
+            "action": "approve",
+        }, doseq=True).encode()
+        request = self.request("/bulk-review", method="POST")
+        request.data = encoded
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with urllib.request.urlopen(request) as response:
+            page = response.read().decode()
+        self.assertIn("Updated 2 observations", page)
+        self.assertEqual(self.store.get(selected[0])["review_state"], "approved")
+        self.assertEqual(self.store.get(selected[0])["reviewed_vulnerability_ids"], ["CVE-2026-1000"])
+        self.assertEqual(self.store.get(selected[1])["review_state"], "approved")
+        self.assertEqual(self.store.get(selected[2])["review_state"], "pending")
+
+        encoded = urllib.parse.urlencode({
+            "csrf": self.server.csrf_token,
+            "page_source": selected,
+            "action": "approve-page",
+        }, doseq=True).encode()
+        request = self.request("/bulk-review", method="POST")
+        request.data = encoded
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with urllib.request.urlopen(request) as response:
+            self.assertIn("Updated 3 observations", response.read().decode())
+        self.assertEqual(self.store.get(selected[2])["review_state"], "approved")
 
     def test_review_queue_rejects_invalid_list_query(self) -> None:
         with self.assertRaises(urllib.error.HTTPError) as raised:

@@ -13,7 +13,8 @@ class ListQueryTest(unittest.TestCase):
     def test_validates_collection_parameters(self) -> None:
         for values in (
             {"page": 0}, {"per_page": 101}, {"sort": "body"}, {"order": "DESC"},
-            {"status": "pending"}, {"review_state": "unknown"}, {"search": "x" * 201},
+            {"status": "pending"}, {"review_state": "unknown"}, {"confidence": "0.9"},
+            {"search": "x" * 201},
         ):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 ListQuery(**values)
@@ -37,6 +38,8 @@ class ListQueryTest(unittest.TestCase):
                 self.assertEqual([row["title"] for row in second.items], ["Widget 1"])
                 searched = store.observation_page(ListQuery(search="Widget 2"))
                 self.assertEqual([row["title"] for row in searched.items], ["Widget 2"])
+                exact = store.observation_page(ListQuery(confidence="1"))
+                self.assertEqual(exact.items, [])
             finally:
                 store.close()
 

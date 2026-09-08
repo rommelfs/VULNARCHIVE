@@ -581,6 +581,11 @@ class Store:
         clauses: list[str] = []
         params: list[object] = []
         rank = ""
+        confidence = (
+            "COALESCE((SELECT MAX(CAST(json_extract(value, '$.confidence') AS REAL)) "
+            "FROM json_each(CASE WHEN json_valid(o.matches_json) "
+            "THEN o.matches_json ELSE '[]' END)), 0)"
+        )
         if tokens and self.fts_enabled:
             joins = " JOIN observations_fts ON observations_fts.source_url=o.source_url"
             clauses.append("observations_fts MATCH ?")
@@ -596,13 +601,10 @@ class Store:
         if request.review_state:
             clauses.append("o.review_state = ?")
             params.append(request.review_state)
+        if request.confidence == "1":
+            clauses.append(f"{confidence} >= 0.999999")
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         total = int(self.db.execute("SELECT COUNT(*) FROM observations o" + joins + where, params).fetchone()[0])
-        confidence = (
-            "COALESCE((SELECT MAX(CAST(json_extract(value, '$.confidence') AS REAL)) "
-            "FROM json_each(CASE WHEN json_valid(o.matches_json) "
-            "THEN o.matches_json ELSE '[]' END)), 0)"
-        )
         sort_columns = {
             "published": "o.published", "title": "o.title COLLATE NOCASE",
             "author": "o.author COLLATE NOCASE", "status": "o.status",
@@ -711,6 +713,43 @@ class Store:
              sighting_type, note[:2000], source_url),
         )
         self.db.commit()
+
+    def review_many(self, source_urls: list[str], state: str, note: str = "") -> int:
+        """Apply one review decision to a bounded set of explicitly selected rows."""
+        sources = list(dict.fromkeys(value for value in source_urls if value))
+        if not sources or len(sources) > 100:
+            raise ValueError("select between 1 and 100 observations")
+        if state not in {"approved", "rejected", "pending"}:
+            raise ValueError("invalid bulk review state")
+        updated = 0
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            for source_url in sources:
+                row = self.get(source_url)
+                if not row:
+                    continue
+                extraction = dict(row.get("extraction") or {})
+                matches = list(row.get("matches") or [])
+                identifiers = list(dict.fromkeys(
+                    str(match.get("vulnerability_id") or "").strip().upper()
+                    for match in matches if isinstance(match, dict) and match.get("vulnerability_id")
+                )) if state == "approved" else []
+                sighting_type = str(extraction.get("proposed_type") or "seen") if state == "approved" else ""
+                if sighting_type not in {"seen", "published-proof-of-concept"}:
+                    sighting_type = "seen"
+                cursor = self.db.execute(
+                    """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?,
+                    reviewed_vulnerability_ids_json=?, reviewed_sighting_type=?, review_note=?,
+                    reviewed_at=CURRENT_TIMESTAMP WHERE source_url=?""",
+                    (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                     sighting_type, note[:2000], source_url),
+                )
+                updated += cursor.rowcount
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return updated
 
     def approved(self, limit: int = 0) -> list[dict[str, object]]:
         self.db.row_factory = sqlite3.Row
