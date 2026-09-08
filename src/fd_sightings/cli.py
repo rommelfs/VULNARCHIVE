@@ -23,7 +23,7 @@ DEFAULT_VL = "https://vulnerability.circl.lu"
 def period(value: str) -> tuple[int, int]:
     try:
         year, month = (int(part) for part in value.split("-", 1))
-        if year < 2002 or not 1 <= month <= 12:
+        if year < 1993 or not 1 <= month <= 12:
             raise ValueError
         return year, month
     except ValueError as exc:
@@ -210,6 +210,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.feed != DEFAULT_RSS and len(selected) != 1:
                 raise ValueError("--feed can only override one source")
             for adapter in selected:
+                if args.feed == DEFAULT_RSS and not adapter.has_current_feed:
+                    print(
+                        f"source {adapter.source_id} has no current RSS feed; "
+                        "use the archive command for historical import",
+                        file=sys.stderr,
+                    )
                 urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
                         else parse_rss(source_client.get_text(args.feed)))
                 aggregate.extend(_process(args, urls, store, source_client, lookup, adapter))
@@ -220,6 +226,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.feed != DEFAULT_RSS and len(selected) != 1:
                 raise ValueError("--feed can only override one source")
             for adapter in selected:
+                if args.feed == DEFAULT_RSS and not adapter.has_current_feed:
+                    print(
+                        f"source {adapter.source_id} has no current RSS feed; "
+                        "use the archive command for historical import",
+                        file=sys.stderr,
+                    )
                 urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
                         else parse_rss(source_client.get_text(args.feed)))
                 results.extend(_process(args, urls, store, source_client, lookup, adapter))

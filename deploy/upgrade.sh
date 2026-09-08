@@ -130,9 +130,12 @@ except ValueError as exc:
     raise SystemExit(f"error: invalid VA_SOURCES in {path}: {exc}")
 if configured is None:
     print(f"WARNING: VA_SOURCES is absent in {path}; only full-disclosure is enabled.")
-    print("Add VA_SOURCES=full-disclosure,bugtraq to enable both unattended feeds.")
+    print("Add VA_SOURCES=full-disclosure,bugtraq to configure both sources; Bugtraq requires a historical archive import.")
+    print("Bugtraq is archive-only and requires an historical import worker.")
 else:
-    print("Enabled unattended sources: " + ", ".join(sources))
+    print("Configured sources: " + ", ".join(sources))
+    if "bugtraq" in sources:
+        print("NOTE: Bugtraq has no current RSS feed; queue an historical archive import.")
 PY
 
 web_was_active=0

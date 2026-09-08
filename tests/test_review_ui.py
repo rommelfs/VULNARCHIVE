@@ -127,13 +127,15 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("Historical archive imports", page)
         self.assertIn('action="/review/workers"', page)
         self.assertEqual(page.count('type="month"'), 2)
-        self.assertEqual(page.count('min="2002-01" max="'), 2)
+        self.assertEqual(page.count('min="1993-01" max="'), 2)
         self.assertIn("Use the calendar controls", page)
         self.assertIn("Import source configuration", page)
         self.assertIn("only to the new historical worker", page)
         self.assertIn("deliberately cannot edit", page)
         self.assertIn('name="source" value="full-disclosure" checked', page)
         self.assertIn('name="source" value="bugtraq"', page)
+        self.assertIn("Bugtraq (historical archive only)", page)
+        self.assertIn("imports no posts during", page)
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,

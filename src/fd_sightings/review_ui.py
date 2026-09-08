@@ -241,19 +241,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
         enabled_sources = set(configured_source_ids())
         source_controls = "".join(
             f'<label><input type="checkbox" name="source" value="{_e(source_id)}" '
-            f'{"checked" if source_id in enabled_sources else ""}> {_e(adapter.name)}</label>'
+            f'{"checked" if source_id in enabled_sources else ""}> {_e(adapter.name)}'
+            f'{"" if adapter.has_current_feed else " (historical archive only)"}</label>'
             for source_id, adapter in SOURCES.items()
         )
         unattended = ", ".join(SOURCES[source_id].name for source_id in enabled_sources)
         content = f'''<div class="panel"><h1>Import source configuration</h1>
 <p>Unattended RSS/sync sources currently loaded by this service: <strong>{_e(unattended)}</strong>.</p>
+<p class="muted">Full Disclosure has a current RSS feed. Bugtraq is an archive-only source and therefore imports no posts during <code>sync</code>; select Bugtraq and an historical month range below to backfill it.</p>
 <p class="muted">The checkboxes below apply only to the new historical worker. To change unattended sync, set <code>VA_SOURCES</code> in <code>/etc/vulnarchive/vulnarchive.env</code> and restart <code>vulnarchive-review.service</code> and <code>vulnarchive-sync.timer</code>. The web service deliberately cannot edit the root-owned environment file or invoke systemctl.</p></div>
 <div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
 <p class="muted">Use the calendar controls to select complete archive months. Future months cannot be queued.</p>
-<div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
-<label>To month <input type="month" name="to_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="Last archive month"></label>
+<div class="toolbar"><label>From month <input type="month" name="from_period" min="1993-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
+<label>To month <input type="month" name="to_period" min="1993-01" max="{current_month}" value="{previous_month}" required aria-label="Last archive month"></label>
 <label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
 {source_controls}
 <label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>

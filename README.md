@@ -103,6 +103,19 @@ For the unattended sync service, configure the enabled sources in
 VA_SOURCES=full-disclosure,bugtraq
 ```
 
+**Important:** Bugtraq is an archive-only source. It has no current RSS feed,
+so enabling it does not make a regular `sync` run discover historical posts.
+Backfill it explicitly, for example:
+
+```sh
+fd-sightings archive --source bugtraq --from-period 2019-01 --to-period 2020-12
+```
+
+The same backfill can be queued in **Review → Archive imports** by selecting
+Bugtraq and the required historical month range. A zero-item current `sync` for
+Bugtraq is expected and is reported as an archive-only source, not as a
+successful historical import.
+
 The authenticated review UI exposes the same selection under **Archive
 imports**. Its Full Disclosure and Bugtraq checkboxes default to `VA_SOURCES`
 and are recorded with each worker job. The page also displays the unattended

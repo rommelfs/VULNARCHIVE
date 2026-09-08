@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from fd_sightings.cli import make_parser
+from fd_sightings.cli import make_parser, period
 from fd_sightings.models import Extraction, Message
 from fd_sightings.sources import SOURCES, adapters, configured_source_ids
 from fd_sightings.store import Store
@@ -23,10 +23,15 @@ class SourcesTest(unittest.TestCase):
         message = SOURCES["bugtraq"].parse(MESSAGE, "https://seclists.org/bugtraq/2026/Sep/1")
         self.assertEqual(message.source_id, "bugtraq")
         self.assertEqual(message.message_id, "same@example.test")
+        class NoRequest:
+            def get_text(self, url):
+                raise AssertionError("archive-only source must not request a feed")
+        self.assertEqual(SOURCES["bugtraq"].feed(NoRequest()), [])
 
     def test_cli_accepts_multiple_sources(self) -> None:
         args = make_parser().parse_args(["rss", "--source", "full-disclosure", "--source", "bugtraq"])
         self.assertEqual(args.sources, ["full-disclosure", "bugtraq"])
+        self.assertEqual(period("1993-01"), (1993, 1))
 
     def test_environment_configures_unattended_default_sources(self) -> None:
         with patch.dict("os.environ", {"VA_SOURCES": "bugtraq,full-disclosure,bugtraq"}):

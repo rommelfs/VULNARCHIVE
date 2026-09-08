@@ -20,8 +20,8 @@ def _now() -> str:
 
 def _month_number(period: str) -> int:
     year, month = (int(part) for part in period.split("-", 1))
-    if year < 2002 or not 1 <= month <= 12:
-        raise ValueError("period must be between 2002-01 and the supported calendar range")
+    if year < 1993 or not 1 <= month <= 12:
+        raise ValueError("period must be between 1993-01 and the supported calendar range")
     return year * 12 + month
 
 

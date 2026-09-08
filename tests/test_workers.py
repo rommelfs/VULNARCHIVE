@@ -47,7 +47,7 @@ class ImportWorkerManagerTests(unittest.TestCase):
     def test_rejects_invalid_or_excessive_ranges(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = ImportWorkerManager(Path(directory) / "archive.sqlite")
-            for start, end in (("2024-03", "2024-01"), ("2001-01", "2001-02"), ("2020-01", "2030-01")):
+            for start, end in (("2024-03", "2024-01"), ("1992-01", "1992-02"), ("2020-01", "2030-01")):
                 with self.assertRaises(ValueError):
                     manager.submit(start, end)
             with self.assertRaises(ValueError):

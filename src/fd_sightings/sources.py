@@ -15,6 +15,9 @@ class SourceAdapter(Protocol):
     archive_url: str
     feed_url: str
 
+    @property
+    def has_current_feed(self) -> bool: ...
+
     def parse(self, content: str, url: str) -> Message: ...
     def feed(self, client: Client) -> list[str]: ...
     def month(self, client: Client, year: int, month: int) -> list[str]: ...
@@ -27,12 +30,18 @@ class SeclistsAdapter:
     archive_url: str
     feed_url: str
 
+    @property
+    def has_current_feed(self) -> bool:
+        return bool(self.feed_url)
+
     def parse(self, content: str, url: str) -> Message:
         message = parse_message(content, url)
         message.source_id = self.source_id
         return message
 
     def feed(self, client: Client) -> list[str]:
+        if not self.feed_url:
+            return []
         return parse_rss(client.get_text(self.feed_url))
 
     def month(self, client: Client, year: int, month: int) -> list[str]:
@@ -53,7 +62,7 @@ SOURCES: dict[str, SourceAdapter] = {
     ),
     "bugtraq": SeclistsAdapter(
         "bugtraq", "Bugtraq",
-        "https://seclists.org/bugtraq", "https://seclists.org/rss/bugtraq.rss",
+        "https://seclists.org/bugtraq", "",
     ),
 }
 
