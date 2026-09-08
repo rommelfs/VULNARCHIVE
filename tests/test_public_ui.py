@@ -104,6 +104,23 @@ class PublicUITest(unittest.TestCase):
                 self.get("/archive/?" + query)
             self.assertEqual(400, raised.exception.code)
 
+    def test_archive_full_text_search_and_public_record_page(self) -> None:
+        _, body, _ = self.get("/archive/?q=Archive+post+3")
+        page = body.decode()
+        self.assertIn("Archive post 3", page)
+        self.assertNotIn("Archive post 2</a>", page)
+        self.assertIn('type="search"', page)
+
+        record = {
+            "dataType": "CVE_RECORD", "dataVersion": "5.2",
+            "cveMetadata": {"vulnId": "GCVE-1988-2026-0042", "state": "PUBLISHED"},
+            "containers": {"cna": {"title": "Public Widget record"}},
+        }
+        self.store.save_publication("record-source", "gcve:record", "gcve", gcve_id="GCVE-1988-2026-0042", status="published", payload=record)
+        _, record_body, content_type = self.get("/vulnerability/GCVE-1988-2026-0042")
+        self.assertEqual(content_type, "text/html")
+        self.assertIn("GCVE-1988-2026-0042", record_body.decode())
+
     def test_admin_and_write_routes_are_unavailable(self) -> None:
         for path in ("/review", "/connection", "/publish", "/observation"):
             with self.assertRaises(urllib.error.HTTPError) as raised:

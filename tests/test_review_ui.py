@@ -11,6 +11,7 @@ import urllib.parse
 from pathlib import Path
 
 from fd_sightings.review_ui import ReviewServer
+from fd_sightings.models import Extraction, Message
 from fd_sightings.store import Store
 
 
@@ -131,6 +132,26 @@ class ReviewUITest(unittest.TestCase):
             live_page = response.read().decode()
         self.assertIn('<meta http-equiv="refresh" content="2">', live_page)
         self.assertIn("This view refreshes every 2 seconds.", live_page)
+
+    def test_approved_observation_links_to_publication_and_published_record(self) -> None:
+        source = "https://seclists.org/fulldisclosure/2026/Sep/42"
+        self.store.save(Message(source, "Searchable Widget flaw", body="distinctive heap corruption"), Extraction(relevant=True), [])
+        self.store.review(source, "approved", [], "seen")
+        with urllib.request.urlopen(self.request("/observation?" + urllib.parse.urlencode({"source": source}))) as response:
+            approved = response.read().decode()
+        self.assertIn("Publish this approved entry locally", approved)
+        self.assertIn('href="/review/publish"', approved)
+
+        record = {
+            "dataType": "CVE_RECORD", "dataVersion": "5.2",
+            "cveMetadata": {"vulnId": "GCVE-1988-2026-0042", "state": "PUBLISHED"},
+            "containers": {"cna": {"title": "Searchable Widget flaw"}},
+        }
+        self.store.save_publication(source, "gcve:advisory", "gcve", gcve_id="GCVE-1988-2026-0042", status="published", payload=record)
+        with urllib.request.urlopen(self.request("/observation?" + urllib.parse.urlencode({"source": source}))) as response:
+            published = response.read().decode()
+        self.assertIn("Open published GCVE-1988-2026-0042", published)
+        self.assertIn("https://vuln.freearchive.org/vulnerability/GCVE-1988-2026-0042", published)
 
 
 if __name__ == "__main__":

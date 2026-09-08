@@ -322,9 +322,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         review = params.get("review", [""])[0]
         match_status = params.get("match", [""])[0]
         query = params.get("q", [""])[0].casefold()
-        rows = self.server.store.rows(match_status or None, review or None)
-        if query:
-            rows = [row for row in rows if query in str(row["title"]).casefold() or query in str(row["source_url"]).casefold()]
+        rows = (self.server.store.search_rows(query, match_status or None, review or None)
+                if query else self.server.store.rows(match_status or None, review or None))
         counts = {state: len(self.server.store.rows(review_state=state)) for state in ("pending", "approved", "rejected")}
         table_rows = []
         for row in rows:
@@ -338,7 +337,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <td>{_e(proposed)}</td><td>{confidence:.3f}</td><td class="{_e(row['review_state'])}">{_e(row['review_state'])}</td></tr>""")
         content = f"""<div class="panel"><h1>Review queue</h1><div class="toolbar">
 <span>Pending <strong>{counts['pending']}</strong></span><span>Approved <strong>{counts['approved']}</strong></span><span>Rejected <strong>{counts['rejected']}</strong></span></div>
-<form class="toolbar" method="get" style="margin-top:16px"><input name="q" value="{_e(params.get('q',[''])[0])}" placeholder="Search title">
+<form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(params.get('q',[''])[0])}" placeholder="Search title, author, body, CVE or CWE">
 <select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), review)}</select>
 <select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), match_status)}</select><button>Filter</button></form></div>
 <div class="panel"><table><thead><tr><th>Observation</th><th>Proposal</th><th>Confidence</th><th>Review</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="4">No observations.</td></tr>'}</tbody></table></div>"""
@@ -403,9 +402,15 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._send(_layout(str(row["title"]), content))
 
     def _publish_form(self, row: dict[str, object], source: str) -> str:
+        published_id = self.server.store.published_gcve_for_source(source)
+        if published_id:
+            public_base = os.environ.get("VA_PUBLIC_BASE_URL", "https://vuln.freearchive.org").rstrip("/")
+            public_url = f"{public_base}/vulnerability/{urllib.parse.quote(published_id)}"
+            return f'<hr><h3>Published</h3><p><a class="button" href="{_e(public_url)}" target="_blank" rel="noreferrer">Open published {_e(published_id)}</a></p>'
         if row["review_state"] != "approved":
             return '<p class="muted">Approval records the review decision; publish it locally in a second step.</p>'
-        return f'''<hr><h3>Local publication</h3><p>Approval alone does not publish. This creates the local BCP-05 record now.</p>
+        return f'''<hr><h3>Local publication</h3><p>Approval is complete. Continue directly with publication or open the batch dashboard.</p>
+<p><a href="/publish">Open publication dashboard</a></p>
 <form method="post" action="/publish"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="mode" value="source"><input type="hidden" name="source" value="{_e(source)}"><button>Publish this approved entry locally</button></form>'''
 
 

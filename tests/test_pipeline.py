@@ -254,6 +254,26 @@ class ParserTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_full_text_index_searches_body_metadata_and_tracks_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "search.sqlite")
+            try:
+                source = "https://example.test/searchable"
+                store.save(
+                    Message(source, "Widget advisory", author="Alice", body="distinctive heap corruption"),
+                    Extraction(relevant=True, cwe_ids=["CWE-122"]), [],
+                )
+                self.assertEqual([row["source_url"] for row in store.search_rows("heap")], [source])
+                self.assertEqual([row["source_url"] for row in store.search_rows("CWE 122")], [source])
+                store.save(
+                    Message(source, "Widget advisory", author="Alice", body="replacement race condition"),
+                    Extraction(relevant=True, cwe_ids=["CWE-362"]), [],
+                )
+                self.assertEqual(store.search_rows("heap"), [])
+                self.assertEqual([row["source_url"] for row in store.search_rows("race")], [source])
+            finally:
+                store.close()
+
     def test_review_accepts_multiple_or_no_referenced_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / "review.sqlite")

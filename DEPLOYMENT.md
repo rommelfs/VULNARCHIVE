@@ -59,6 +59,12 @@ Confirm that the unprefixed `/connection`, `/publish`, and `/observation` paths 
 404. `/review` redirects to the separately authenticated review backend at
 `https://vuln.freearchive.org/review/`; TCP/8765 remains restricted to the proxy.
 
+The `/vulnerability/` public route is part of the explicit Apache allowlist. When
+deploying this route for the first time, install the updated
+`deploy/apache-vuln.freearchive.org.conf`, run `apachectl configtest`, and reload
+Apache. The application upgrade script deliberately does not overwrite an
+operator-managed Apache virtual host.
+
 ## Publication and operation
 
 Before enabling periodic publication, verify the local policy and run:

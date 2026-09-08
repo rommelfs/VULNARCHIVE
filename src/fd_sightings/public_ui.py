@@ -99,6 +99,8 @@ class PublicHandler(BaseHTTPRequestHandler):
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
+        elif parsed.path.startswith("/vulnerability/"):
+            self._vulnerability(parsed.path.removeprefix("/vulnerability/").strip("/"))
         else:
             self._json({"error": "not found"}, 404)
 
@@ -114,11 +116,16 @@ class PublicHandler(BaseHTTPRequestHandler):
             if len(month) != 1 or (month[0] and not re.fullmatch(r"\d{4}-(?:0[1-9]|1[0-2])", month[0])):
                 raise ValueError("month must use YYYY-MM")
             selected_month = month[0]
+            search = params.get("q", [""])
+            if len(search) != 1 or len(search[0]) > 200:
+                raise ValueError("q must contain at most 200 characters")
+            search_query = search[0].strip()
         except ValueError as exc:
             self._send(_public_layout("Invalid archive query", f'<h1>Invalid archive query</h1><p>{_e(exc)}</p>'), "text/html; charset=utf-8", 400)
             return
 
-        dated_rows = [(row, _post_date(row.get("published"))) for row in self.server.store.rows()]
+        source_rows = self.server.store.search_rows(search_query) if search_query else self.server.store.rows()
+        dated_rows = [(row, _post_date(row.get("published"))) for row in source_rows]
         dated_rows.sort(key=lambda item: (item[1] or datetime.min.replace(tzinfo=timezone.utc), str(item[0]["source_url"])), reverse=True)
         month_counts: dict[str, int] = {}
         for _, published in dated_rows:
@@ -150,15 +157,21 @@ class PublicHandler(BaseHTTPRequestHandler):
         if not sections:
             sections = '<p class="muted">No archived posts found.</p>'
 
-        month_links = ['<li><a href="/archive/">All months</a></li>']
+        search_suffix = "?" + urllib.parse.urlencode({"q": search_query}) if search_query else ""
+        month_links = [f'<li><a href="/archive/{search_suffix}">All months</a></li>']
         for key, count in month_counts.items():
             if key == "unknown":
                 continue
             label = datetime.strptime(key, "%Y-%m").strftime("%B %Y")
-            month_links.append(f'<li><a href="/archive/?month={key}">{label} ({count})</a></li>')
+            month_query = {"month": key}
+            if search_query:
+                month_query["q"] = search_query
+            month_links.append(f'<li><a href="/archive/?{urllib.parse.urlencode(month_query)}">{label} ({count})</a></li>')
         common = {"per_page": str(per_page)}
         if selected_month:
             common["month"] = selected_month
+        if search_query:
+            common["q"] = search_query
         pagination = []
         if page > 1:
             pagination.append(f'<li><a rel="prev" href="/archive/?{urllib.parse.urlencode({**common, "page": page - 1})}">Previous</a></li>')
@@ -166,6 +179,9 @@ class PublicHandler(BaseHTTPRequestHandler):
         if page < pages:
             pagination.append(f'<li><a rel="next" href="/archive/?{urllib.parse.urlencode({**common, "page": page + 1})}">Next</a></li>')
         content = (f'<div class="panel"><h1>Full Disclosure archive</h1>'
+                   f'<form method="get" action="/archive/" role="search"><label>Full-text search '
+                   f'<input type="search" name="q" value="{html.escape(search_query, quote=True)}" maxlength="200" placeholder="Product, CVE, author or report text"></label> '
+                   f'<button>Search</button></form>'
                    f'<nav aria-label="Archive months"><ul class="months">{"".join(month_links)}</ul></nav>'
                    f'{sections}<nav aria-label="Pagination"><ul class="pagination">{"".join(pagination)}</ul></nav></div>')
         self._send(_public_layout("Archive", content), "text/html; charset=utf-8")
@@ -179,6 +195,19 @@ class PublicHandler(BaseHTTPRequestHandler):
         date = published.date().isoformat() if published else str(row.get("published") or "Unknown date")
         body = _public_layout(str(row["title"]), f'<div class="panel"><h1>{html.escape(str(row["title"]))}</h1><p>{html.escape(str(row["author"]))} · <time datetime="{html.escape(date)}">{html.escape(date)}</time></p><pre>{html.escape(str(row["body"]))}</pre></div>')
         self._send(body, "text/html; charset=utf-8")
+
+    def _vulnerability(self, vulnerability_id: str) -> None:
+        if not re.fullmatch(r"GCVE-[1-9][0-9]*-[0-9]{4}-[0-9]{4,19}", vulnerability_id, re.IGNORECASE):
+            self._json({"error": "not found"}, 404)
+            return
+        record = self.server.store.gcve_record(vulnerability_id)
+        if not record:
+            self._json({"error": "not found"}, 404)
+            return
+        cna = record.get("containers", {}).get("cna", {})
+        title = str(cna.get("title") or vulnerability_id.upper())
+        rendered = html.escape(json.dumps(record, ensure_ascii=False, indent=2))
+        self._send(_public_layout(title, f'<div class="panel"><h1>{html.escape(vulnerability_id.upper())}</h1><h2>{html.escape(title)}</h2><pre>{rendered}</pre></div>'), "text/html; charset=utf-8")
 
 
 def serve(store: Store, bind: str = "127.0.0.1", port: int = 8766) -> None:

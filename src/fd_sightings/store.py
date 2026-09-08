@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -172,6 +173,41 @@ class Store:
                 ),
             )
         self.db.commit()
+        self._setup_full_text_index()
+
+    def _setup_full_text_index(self) -> None:
+        """Create and synchronize the optional SQLite FTS5 observation index."""
+        try:
+            self.db.executescript("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+                    source_url UNINDEXED, title, author, body, metadata,
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN
+                    INSERT INTO observations_fts(source_url,title,author,body,metadata)
+                    VALUES (new.source_url,new.title,new.author,new.body,new.extraction_json);
+                END;
+                CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations BEGIN
+                    DELETE FROM observations_fts WHERE source_url=old.source_url;
+                END;
+                CREATE TRIGGER IF NOT EXISTS observations_fts_update AFTER UPDATE ON observations BEGIN
+                    DELETE FROM observations_fts WHERE source_url=old.source_url;
+                    INSERT INTO observations_fts(source_url,title,author,body,metadata)
+                    VALUES (new.source_url,new.title,new.author,new.body,new.extraction_json);
+                END;
+            """)
+            indexed = int(self.db.execute("SELECT COUNT(*) FROM observations_fts").fetchone()[0])
+            observed = int(self.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0])
+            if indexed != observed:
+                self.db.execute("DELETE FROM observations_fts")
+                self.db.execute(
+                    "INSERT INTO observations_fts(source_url,title,author,body,metadata) "
+                    "SELECT source_url,title,author,body,extraction_json FROM observations"
+                )
+            self.db.commit()
+            self.fts_enabled = True
+        except sqlite3.OperationalError:
+            self.fts_enabled = False
 
     def close(self) -> None:
         self.db.close()
@@ -464,6 +500,59 @@ class Store:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY published DESC, source_url DESC"
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
+
+    def search_rows(
+        self, query: str, status: str | None = None, review_state: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Search titles, authors, bodies and extracted metadata using FTS5."""
+        tokens = re.findall(r"[^\W_]+", query, re.UNICODE)[:12]
+        if not tokens:
+            return []
+        if not self.fts_enabled:
+            needle = "%" + " ".join(tokens) + "%"
+            self.db.row_factory = sqlite3.Row
+            clauses = ["(title LIKE ? OR author LIKE ? OR body LIKE ? OR extraction_json LIKE ?)"]
+            params: list[str] = [needle, needle, needle, needle]
+            if status:
+                clauses.append("status = ?")
+                params.append(status)
+            if review_state:
+                clauses.append("review_state = ?")
+                params.append(review_state)
+            rows = self.db.execute(
+                "SELECT * FROM observations WHERE " + " AND ".join(clauses) +
+                " ORDER BY published DESC, source_url DESC", params,
+            )
+            return [self._decode(row) for row in rows]
+        expression = " AND ".join(f'"{token}"*' for token in tokens)
+        clauses = ["observations_fts MATCH ?"]
+        params: list[str] = [expression]
+        if status:
+            clauses.append("o.status = ?")
+            params.append(status)
+        if review_state:
+            clauses.append("o.review_state = ?")
+            params.append(review_state)
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            "SELECT o.*, bm25(observations_fts, 0.0, 5.0, 2.0, 1.0, 3.0) AS search_rank "
+            "FROM observations_fts JOIN observations o ON o.source_url=observations_fts.source_url "
+            "WHERE " + " AND ".join(clauses) + " ORDER BY search_rank, o.published DESC, o.source_url DESC",
+            params,
+        )
+        return [self._decode(row) for row in rows]
+
+    def published_gcve_for_source(self, source_url: str) -> str:
+        row = self.db.execute(
+            "SELECT gcve_id FROM automatic_publications "
+            "WHERE source_url=? AND kind='gcve' AND status='published' AND gcve_id<>'' "
+            "ORDER BY published_at DESC LIMIT 1", (source_url,),
+        ).fetchone()
+        return str(row[0]) if row else ""
+
+    def gcve_record(self, vulnerability_id: str) -> dict[str, object] | None:
+        row = self.db.execute("SELECT record_json FROM gcve_records WHERE vuln_id=?", (vulnerability_id.upper(),)).fetchone()
+        return json.loads(str(row[0])) if row else None
 
     def get(self, source_url: str) -> dict[str, object] | None:
         self.db.row_factory = sqlite3.Row
