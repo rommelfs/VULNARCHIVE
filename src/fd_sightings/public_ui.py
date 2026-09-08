@@ -232,8 +232,30 @@ class PublicHandler(BaseHTTPRequestHandler):
             return
         cna = record.get("containers", {}).get("cna", {})
         title = str(cna.get("title") or vulnerability_id.upper())
+        descriptions = cna.get("descriptions", []) if isinstance(cna, dict) else []
+        rendered_descriptions = "".join(
+            f'<section><h3>Description ({html.escape(str(item.get("lang") or "und"))})</h3>'
+            f'<pre>{html.escape(str(item.get("value") or ""))}</pre></section>'
+            for item in descriptions
+            if isinstance(item, dict) and item.get("value")
+        )
+        references = cna.get("references", []) if isinstance(cna, dict) else []
+        rendered_references = "".join(
+            f'<li><a href="{html.escape(str(item.get("url")), quote=True)}" rel="noreferrer">'
+            f'{html.escape(str(item.get("url")))}</a></li>'
+            for item in references
+            if isinstance(item, dict) and str(item.get("url") or "").startswith(("http://", "https://"))
+        )
+        human = rendered_descriptions
+        if rendered_references:
+            human += f'<section><h3>References</h3><ul>{rendered_references}</ul></section>'
         rendered = html.escape(json.dumps(record, ensure_ascii=False, indent=2))
-        self._send(_public_layout(title, f'<div class="panel"><h1>{html.escape(vulnerability_id.upper())}</h1><h2>{html.escape(title)}</h2><pre>{rendered}</pre></div>'), "text/html; charset=utf-8")
+        self._send(_public_layout(
+            title,
+            f'<div class="panel"><h1>{html.escape(vulnerability_id.upper())}</h1>'
+            f'<h2>{html.escape(title)}</h2>{human}'
+            f'<details><summary>Raw JSON</summary><pre>{rendered}</pre></details></div>',
+        ), "text/html; charset=utf-8")
 
 
 def serve(store: Store, bind: str = "127.0.0.1", port: int = 8766) -> None:

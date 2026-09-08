@@ -118,12 +118,21 @@ class PublicUITest(unittest.TestCase):
         record = {
             "dataType": "CVE_RECORD", "dataVersion": "5.2",
             "cveMetadata": {"vulnId": "GCVE-1988-2026-0042", "state": "PUBLISHED"},
-            "containers": {"cna": {"title": "Public Widget record"}},
+            "containers": {"cna": {
+                "title": "Public Widget record",
+                "descriptions": [{"lang": "en", "value": "First line\nSecond line"}],
+                "references": [{"url": "https://example.test/advisory"}],
+            }},
         }
         self.store.save_publication("record-source", "gcve:record", "gcve", gcve_id="GCVE-1988-2026-0042", status="published", payload=record)
         _, record_body, content_type = self.get("/vulnerability/GCVE-1988-2026-0042")
         self.assertEqual(content_type, "text/html")
-        self.assertIn("GCVE-1988-2026-0042", record_body.decode())
+        page = record_body.decode()
+        self.assertIn("GCVE-1988-2026-0042", page)
+        self.assertIn("<pre>First line\nSecond line</pre>", page)
+        self.assertIn('href="https://example.test/advisory"', page)
+        self.assertIn("<summary>Raw JSON</summary>", page)
+        self.assertIn(r"First line\nSecond line", page)
 
     def test_admin_and_write_routes_are_unavailable(self) -> None:
         for path in ("/review", "/connection", "/publish", "/observation"):
