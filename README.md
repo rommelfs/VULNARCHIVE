@@ -14,6 +14,7 @@ The GCVE Best Current Practices supplied with this repository are indexed in
 
 - Historical import by archive month or period
 - Continuous import from the official RSS feed
+- Repeatable source selection for Full Disclosure and Bugtraq
 - SQLite checkpoints and idempotent re-runs
 - Original source retention with SHA-256, format, and Message-ID when available
 - CVE, GCVE, GHSA, CWE, and CVSS extraction
@@ -23,7 +24,7 @@ The GCVE Best Current Practices supplied with this repository are indexed in
 - Conservative product/title candidate matching for ID-less posts
 - Auditable candidate evidence and contradiction-aware CWE/version comparison
 - JSON Lines review export
-- Local analyst review interface with filters, detail view, approval, rejection, match override, and notes
+- Local analyst review interface with filters, server-side pagination and sorting, detail view, approval, rejection, match override, and notes
 - SQLite FTS5 full-text search across titles, authors, post bodies, CVE/CWE metadata
 - Explicit, single-observation Sighting submission
 - Dry-run or explicit batch submission of approved observations
@@ -82,6 +83,18 @@ Process the current feed. Repeated runs skip URLs already stored:
 fd-sightings rss
 ```
 
+Import both configured Seclists sources. `--source` is repeatable for `rss`,
+`sync`, and `archive`; omitting it keeps the Full Disclosure default:
+
+```sh
+fd-sightings rss --source full-disclosure --source bugtraq
+fd-sightings archive --source bugtraq --from-period 2020-01 --to-period 2020-12
+```
+
+Source adapters own discovery and parsing. Observations retain a stable source
+identifier and use Message-ID as their per-source canonical key when available,
+so a second mirror URL does not create a duplicate observation.
+
 For the continuous Phase-2 operation, import the current feed and immediately apply the automatic publication policy in one idempotent run:
 
 ```sh
@@ -117,6 +130,8 @@ After approval, the observation links directly to the publication action. Once
 published, that action is replaced by a link to the public record at
 `/vulnerability/<GCVE-ID>`. The review queue and public archive both use the
 SQLite full-text index for product, identifier, author, title, and body searches.
+Review results are paginated in SQL and can be sorted by observation title,
+confidence, or review state; filters and sort order are retained while paging.
 
 Authenticated operators can also open **Archive imports** in the review interface
 to queue historical month ranges. These background jobs run sequentially, retain
