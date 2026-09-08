@@ -95,6 +95,18 @@ Source adapters own discovery and parsing. Observations retain a stable source
 identifier and use Message-ID as their per-source canonical key when available,
 so a second mirror URL does not create a duplicate observation.
 
+For the unattended sync service, configure the enabled sources in
+`/etc/vulnarchive/vulnarchive.env` (the template is
+`config/vulnarchive.env.example`):
+
+```env
+VA_SOURCES=full-disclosure,bugtraq
+```
+
+The authenticated review UI exposes the same selection under **Archive
+imports**. Its Full Disclosure and Bugtraq checkboxes default to `VA_SOURCES`
+and are recorded with each worker job.
+
 For the continuous Phase-2 operation, import the current feed and immediately apply the automatic publication policy in one idempotent run:
 
 ```sh

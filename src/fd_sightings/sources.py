@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Protocol
 
 from .http import Client, HTTPError
@@ -57,6 +58,17 @@ SOURCES: dict[str, SourceAdapter] = {
 }
 
 
+def configured_source_ids(value: str | None = None) -> list[str]:
+    configured = value if value is not None else os.getenv("VA_SOURCES", "full-disclosure")
+    selected = list(dict.fromkeys(item.strip() for item in configured.split(",") if item.strip()))
+    if not selected:
+        raise ValueError("at least one source must be configured")
+    unknown = [source_id for source_id in selected if source_id not in SOURCES]
+    if unknown:
+        raise ValueError("unknown source: " + ", ".join(unknown))
+    return selected
+
+
 def adapters(source_ids: list[str] | None) -> list[SourceAdapter]:
-    selected = source_ids or ["full-disclosure"]
+    selected = source_ids if source_ids is not None else configured_source_ids()
     return [SOURCES[source_id] for source_id in dict.fromkeys(selected)]

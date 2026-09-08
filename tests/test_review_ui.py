@@ -104,8 +104,8 @@ class ReviewUITest(unittest.TestCase):
             def __init__(self):
                 self.submitted = []
 
-            def submit(self, start, end, *, limit=0, semantic=False, refresh=False):
-                self.submitted.append((start, end, limit, semantic, refresh))
+            def submit(self, start, end, *, limit=0, semantic=False, refresh=False, sources=None):
+                self.submitted.append((start, end, limit, semantic, refresh, sources))
                 return {"id": "abc123"}
 
             def jobs(self):
@@ -129,6 +129,8 @@ class ReviewUITest(unittest.TestCase):
         self.assertEqual(page.count('type="month"'), 2)
         self.assertEqual(page.count('min="2002-01" max="'), 2)
         self.assertIn("Use the calendar controls", page)
+        self.assertIn('name="source" value="full-disclosure" checked', page)
+        self.assertIn('name="source" value="bugtraq"', page)
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,
@@ -137,7 +139,8 @@ class ReviewUITest(unittest.TestCase):
             "limit": "25",
             "semantic": "1",
             "refresh": "1",
-        }).encode()
+            "source": ["full-disclosure", "bugtraq"],
+        }, doseq=True).encode()
         request = self.request("/workers", method="POST")
         request.data = encoded
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -149,7 +152,10 @@ class ReviewUITest(unittest.TestCase):
             urllib.request.build_opener(NoRedirect()).open(request)
         self.assertEqual(redirected.exception.code, 303)
         self.assertIn("/review/workers?job=abc123", redirected.exception.headers["Location"])
-        self.assertEqual(workers.submitted, [("2024-01", "2024-03", 25, True, True)])
+        self.assertEqual(workers.submitted, [(
+            "2024-01", "2024-03", 25, True, True,
+            ["full-disclosure", "bugtraq"],
+        )])
         with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
             live_page = response.read().decode()
         self.assertIn('<meta http-equiv="refresh" content="2">', live_page)

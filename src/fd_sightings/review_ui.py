@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from .store import Store
 from .query import ListQuery
 from .workers import ImportWorkerManager
+from .sources import SOURCES, configured_source_ids
 
 SIGHTING_TYPES = ("seen", "published-proof-of-concept")
 
@@ -209,6 +210,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 limit=limit,
                 semantic=data.get("semantic", [""])[0] == "1",
                 refresh=data.get("refresh", [""])[0] == "1",
+                sources=data.get("source", []),
             )
         except (ValueError, OSError) as exc:
             self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
@@ -236,6 +238,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
         previous_year = now.year if now.month > 1 else now.year - 1
         previous_month_number = now.month - 1 if now.month > 1 else 12
         previous_month = f"{previous_year:04d}-{previous_month_number:02d}"
+        enabled_sources = set(configured_source_ids())
+        source_controls = "".join(
+            f'<label><input type="checkbox" name="source" value="{_e(source_id)}" '
+            f'{"checked" if source_id in enabled_sources else ""}> {_e(adapter.name)}</label>'
+            for source_id, adapter in SOURCES.items()
+        )
         content = f'''<div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
@@ -243,6 +251,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <div class="toolbar"><label>From month <input type="month" name="from_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
 <label>To month <input type="month" name="to_period" min="2002-01" max="{current_month}" value="{previous_month}" required aria-label="Last archive month"></label>
 <label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
+{source_controls}
 <label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
 <label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>
 <div class="panel"><h2>Workers</h2><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>

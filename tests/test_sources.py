@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from fd_sightings.cli import make_parser
 from fd_sightings.models import Extraction, Message
-from fd_sightings.sources import SOURCES, adapters
+from fd_sightings.sources import SOURCES, adapters, configured_source_ids
 from fd_sightings.store import Store
 
 
@@ -26,6 +27,15 @@ class SourcesTest(unittest.TestCase):
     def test_cli_accepts_multiple_sources(self) -> None:
         args = make_parser().parse_args(["rss", "--source", "full-disclosure", "--source", "bugtraq"])
         self.assertEqual(args.sources, ["full-disclosure", "bugtraq"])
+
+    def test_environment_configures_unattended_default_sources(self) -> None:
+        with patch.dict("os.environ", {"VA_SOURCES": "bugtraq,full-disclosure,bugtraq"}):
+            self.assertEqual(configured_source_ids(), ["bugtraq", "full-disclosure"])
+            self.assertEqual([adapter.source_id for adapter in adapters(None)],
+                             ["bugtraq", "full-disclosure"])
+        with patch.dict("os.environ", {"VA_SOURCES": "unknown"}):
+            with self.assertRaises(ValueError):
+                configured_source_ids()
 
     def test_store_migrates_source_metadata_and_deduplicates_message_id_per_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
