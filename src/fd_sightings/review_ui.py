@@ -220,26 +220,28 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def _workers(self, params: dict[str, list[str]]) -> None:
         selected_id = params.get("job", [""])[0]
         selected = self.server.workers.get(selected_id)
-        # A running job page refreshes frequently. Do not enumerate and render
-        # the complete job history on every poll: large archives can otherwise
-        # make the response slower than the refresh interval.
-        jobs = [] if selected else self.server.workers.jobs(limit=100)
+        if selected:
+            log = self.server.workers.log_tail(selected)
+            running = selected["status"] in {"queued", "running"}
+            feedback = "This compact view refreshes every 10 seconds." if running else "Final output"
+            sources = ", ".join(selected.get("sources") or ["full-disclosure"])
+            refresh_url = "/workers?" + urllib.parse.urlencode({"job": selected["id"]})
+            detail = (f'<div class="panel"><div class="toolbar"><a href="/workers">← Worker list</a>'
+                      f'<a class="button secondary" href="{_e(refresh_url)}">Refresh now</a></div>'
+                      f'<h1>Worker {_e(selected["id"])}</h1>'
+                      f'<p>Sources: <strong>{_e(sources)}</strong></p>'
+                      f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected.get("return_code"))}</p>'
+                      f'<p class="muted">{feedback}</p>'
+                      f'<pre>{_e(log or "No output yet.")}</pre></div>')
+            self._send(_layout("Import worker", detail, refresh=10 if running else 0))
+            return
+
+        jobs = self.server.workers.jobs(limit=100)
         rows = "".join(
             f'<tr><td><a href="{_e("/workers?" + urllib.parse.urlencode({"job": job["id"]}))}">{_e(job["id"][:10])}</a></td>'
             f'<td>{_e(job["from_period"])} – {_e(job["to_period"])}</td><td class="{_e(job["status"])}">{_e(job["status"])}</td>'
             f'<td>{_e(job["created_at"])}</td></tr>' for job in jobs
         )
-        detail = ""
-        if selected:
-            log = self.server.workers.log_tail(selected)
-            feedback = "This view refreshes every 2 seconds." if selected["status"] in {"queued", "running"} else "Final output"
-            sources = ", ".join(selected.get("sources") or ["full-disclosure"])
-            detail = (f'<div class="panel"><p><a href="/workers">← Worker list</a></p>'
-                      f'<h2>Worker {_e(selected["id"])}</h2>'
-                      f'<p>Sources: <strong>{_e(sources)}</strong></p>'
-                      f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected["return_code"])}</p>'
-                      f'<p class="muted">{feedback}</p>'
-                      f'<pre>{_e(log or "No output yet.")}</pre></div>')
         now = datetime.now(timezone.utc)
         current_month = f"{now.year:04d}-{now.month:02d}"
         previous_year = now.year if now.month > 1 else now.year - 1
@@ -267,10 +269,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 {source_controls}
 <label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
 <label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>
-{detail if selected else f'''<div class="panel"><h2>Most recent workers</h2><p class="muted">Showing at most 100 jobs. Open a job to view its live output.</p><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
-<tbody>{rows or '<tr><td colspan="4">No import workers yet.</td></tr>'}</tbody></table></div>'''}'''
-        auto_refresh = 2 if selected and selected["status"] in {"queued", "running"} else 0
-        self._send(_layout("Archive imports", content, refresh=auto_refresh))
+<div class="panel"><h2>Most recent workers</h2><p class="muted">Showing at most 100 jobs. Open a job to view its live output.</p><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
+<tbody>{rows or '<tr><td colspan="4">No import workers yet.</td></tr>'}</tbody></table></div>'''
+        self._send(_layout("Archive imports", content))
 
     def _publish_source(self, data: dict[str, list[str]]) -> None:
         from .policy import PublicationPolicy

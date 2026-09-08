@@ -173,10 +173,12 @@ class ReviewUITest(unittest.TestCase):
         with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
             live_page = response.read().decode()
         self.assertEqual(workers.job_list_calls, 1)
-        self.assertIn('<meta http-equiv="refresh" content="2">', live_page)
-        self.assertIn("This view refreshes every 2 seconds.", live_page)
+        self.assertIn('<meta http-equiv="refresh" content="10">', live_page)
+        self.assertIn("This compact view refreshes every 10 seconds.", live_page)
         self.assertIn("Sources:", live_page)
+        self.assertIn("Refresh now", live_page)
         self.assertNotIn("Most recent workers", live_page)
+        self.assertNotIn("Historical archive imports", live_page)
 
     def test_approved_observation_links_to_publication_and_published_record(self) -> None:
         source = "https://seclists.org/fulldisclosure/2026/Sep/42"
