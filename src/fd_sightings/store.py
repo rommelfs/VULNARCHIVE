@@ -199,6 +199,27 @@ class Store:
                     rowid,
                 ),
             )
+        # Older publication paths could commit the durable ledger without
+        # populating the canonical table consumed by the public detail route.
+        # Recover valid published payloads so a "Published" link cannot lead to
+        # a 404 merely because the two projections predate the atomic writer.
+        for source_url, gcve_id, payload_json, reserved, published, updated in self.db.execute(
+            """SELECT source_url, gcve_id, payload_json, reserved_at, published_at, updated_at
+            FROM automatic_publications p
+            WHERE kind='gcve' AND status='published' AND gcve_id<>''
+              AND NOT EXISTS (SELECT 1 FROM gcve_records r WHERE r.vuln_id=p.gcve_id)"""
+        ).fetchall():
+            try:
+                record = json.loads(str(payload_json))
+                if not isinstance(record, dict) or self._record_id(record) != str(gcve_id).upper():
+                    continue
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            timestamp = str(published or updated or reserved or self._utc_now())
+            self._insert_canonical_record(
+                str(gcve_id), str(source_url), record,
+                str(reserved or timestamp), str(published or timestamp), str(updated or timestamp),
+            )
         self.db.commit()
         self._setup_full_text_index()
 
@@ -648,9 +669,9 @@ class Store:
 
     def published_gcve_for_source(self, source_url: str) -> str:
         row = self.db.execute(
-            "SELECT gcve_id FROM automatic_publications "
-            "WHERE source_url=? AND kind='gcve' AND status='published' AND gcve_id<>'' "
-            "ORDER BY published_at DESC LIMIT 1", (source_url,),
+            "SELECT p.gcve_id FROM automatic_publications p JOIN gcve_records r ON r.vuln_id=p.gcve_id "
+            "WHERE p.source_url=? AND p.kind='gcve' AND p.status='published' AND p.gcve_id<>'' "
+            "ORDER BY p.published_at DESC LIMIT 1", (source_url,),
         ).fetchone()
         return str(row[0]) if row else ""
 
