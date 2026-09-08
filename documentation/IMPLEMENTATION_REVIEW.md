@@ -79,8 +79,11 @@ Produkt-, Vendor-, Komponenten- oder Versionswidersprüchen werden vor dem LLM
 ausgeschlossen und mit Begründung protokolliert; chronologisch spätere
 Kandidaten werden als Widerspruch markiert. Noch offen sind unstrukturierte
 Aliasauflösung, semantisch belastbare Versionsbereichsvergleiche, breiteres
-Retrieval sowie eine gelabelte Evaluation mit festgelegtem Präzisionsziel.
-`automatic` sollte bis zur Evaluation und Datenschutzfreigabe gesperrt bleiben.
+Retrieval sowie ein ausreichend großer produktionsnaher Label-Korpus. Ein
+Offline-Evaluator berechnet Precision/Recall und liefert maschinenlesbare
+Einzelergebnisse; `automatic` verlangt nun einen bestandenen Report für die
+aktuelle Promptversion mit mindestens 0,98 Precision und 0,80 Recall. Die
+Datenschutzfreigabe und der Ausbau des Label-Korpus bleiben Produktions-Gates.
 
 ### 4. Manueller Approval-Prozess — teilweise
 

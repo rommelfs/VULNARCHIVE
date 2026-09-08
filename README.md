@@ -176,6 +176,21 @@ candidate matching removes deterministic product, vendor, component, and
 non-overlapping-version conflicts before any optional LLM call, while preserving
 every exclusion and reason in the analysis event.
 
+Run the offline matching gate against labelled JSON fixtures before enabling
+automatic LLM matching:
+
+```sh
+fd-sightings evaluate tests/fixtures/matching \
+  --min-precision 0.98 --min-recall 0.80 \
+  --output data/matching-evaluation.json
+```
+
+The command exits with status `2` when a gate fails and writes per-case expected
+and predicted IDs plus aggregate precision/recall. `VA_LLM_MODE=automatic` is
+rejected unless `VA_MATCH_EVALUATION_REPORT` names a passing report for the
+current prompt version and at least the built-in minimum gates. Expanding the
+labelled corpus remains an operational prerequisite before production rollout.
+
 The bootstrap administrator configured with `VA_REVIEW_USERNAME` and
 `VA_REVIEW_PASSWORD` can open **Users** to create, reset, enable, or disable
 database-backed reviewer and administrator accounts. Managed passwords are

@@ -44,13 +44,19 @@ class LLMMatcher:
 
     @classmethod
     def from_env(cls, client: Client) -> "LLMMatcher":
-        return cls(
+        matcher = cls(
             client,
             os.getenv("VA_LLM_API_URL", "https://api.openai.com/v1/responses"),
             os.getenv("OPENAI_API_KEY", ""),
             os.getenv("VA_LLM_MODEL", ""),
             os.getenv("VA_LLM_MODE", "off").strip().casefold(),
         )
+        if matcher.mode == "automatic":
+            from .evaluation import valid_automatic_gate
+            report = os.getenv("VA_MATCH_EVALUATION_REPORT", "")
+            if not report or not valid_automatic_gate(report, PROMPT_VERSION):
+                raise ValueError("automatic LLM mode requires a passing current VA_MATCH_EVALUATION_REPORT")
+        return matcher
 
     @property
     def enabled(self) -> bool:

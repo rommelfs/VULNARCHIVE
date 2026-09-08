@@ -93,6 +93,11 @@ def make_parser() -> argparse.ArgumentParser:
 
     publication_export = sub.add_parser("export-publications", help="Export the automatic publication ledger as JSON Lines")
     publication_export.add_argument("--output", default="-")
+    evaluate = sub.add_parser("evaluate", help="Evaluate deterministic matching against labelled JSON fixtures")
+    evaluate.add_argument("fixtures", nargs="+", help="Fixture JSON files or directories")
+    evaluate.add_argument("--min-precision", type=float, default=0.98)
+    evaluate.add_argument("--min-recall", type=float, default=0.80)
+    evaluate.add_argument("--output", default="-", help="Write the JSON report to this path")
     return parser
 
 
@@ -154,6 +159,19 @@ def _process(args: argparse.Namespace, urls: list[str], store: Store, source_cli
 
 def main(argv: list[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
+    if args.command == "evaluate":
+        from .evaluation import evaluate_cases, load_cases
+        from .llm import PROMPT_VERSION
+        report = evaluate_cases(
+            load_cases(args.fixtures), min_precision=args.min_precision, min_recall=args.min_recall,
+        ).as_dict()
+        report["prompt_version"] = PROMPT_VERSION
+        encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+        if args.output == "-":
+            sys.stdout.write(encoded)
+        else:
+            Path(args.output).write_text(encoded, encoding="utf-8")
+        return 0 if report["passed"] else 2
     store = Store(args.db)
     try:
         if args.command == "policy":

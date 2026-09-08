@@ -1,0 +1,35 @@
+[
+  {
+    "name": "explicit identifier resolves",
+    "message": {
+      "source_url": "https://example.test/explicit",
+      "title": "Widget security update",
+      "body": "Widget is affected by CVE-2026-1234."
+    },
+    "candidates": [
+      {
+        "cveMetadata": {"vulnId": "CVE-2026-1234"},
+        "containers": {"cna": {"title": "Widget vulnerability"}}
+      }
+    ],
+    "expected_ids": ["CVE-2026-1234"]
+  },
+  {
+    "name": "different identity is rejected",
+    "message": {
+      "source_url": "https://example.test/conflict",
+      "title": "Widget Server RCE",
+      "body": "Vendor: Example Corp\nProduct: Widget Server\nComponent: HTTP parser\nVersions: 2.4.1\nRemote code execution vulnerability."
+    },
+    "candidates": [
+      {
+        "cveMetadata": {"vulnId": "CVE-2026-9999"},
+        "containers": {"cna": {
+          "title": "Other Product RCE",
+          "affected": [{"vendor": "Other Corp", "product": "Other Product", "versions": [{"version": "9.0"}]}]
+        }}
+      }
+    ],
+    "expected_ids": []
+  }
+]
