@@ -29,7 +29,13 @@ class Extraction:
     cwe_ids: list[str] = field(default_factory=list)
     cvss_vectors: list[str] = field(default_factory=list)
     product_hint: str = ""
+    vendor_hint: str = ""
+    component_hint: str = ""
+    product_aliases: list[str] = field(default_factory=list)
     affected_versions: list[str] = field(default_factory=list)
+    version_constraints: list[dict[str, str]] = field(default_factory=list)
+    fixed_versions: list[str] = field(default_factory=list)
+    commits: list[str] = field(default_factory=list)
     vulnerability_types: list[str] = field(default_factory=list)
     poc_score: int = 0
     poc_evidence: list[str] = field(default_factory=list)

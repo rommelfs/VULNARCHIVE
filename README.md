@@ -170,6 +170,11 @@ events. They retain the trigger, retrieval time, complete bounded candidate set,
 deterministic matches, final matches, provider/model, prompt version, input hash,
 response ID, structured LLM output, and errors. The latest 20 runs can be
 inspected from the observation detail page.
+Extraction now distinguishes labelled vendor, product, component and aliases,
+affected-version constraints, fixed versions, and commit references. Semantic
+candidate matching removes deterministic product, vendor, component, and
+non-overlapping-version conflicts before any optional LLM call, while preserving
+every exclusion and reason in the analysis event.
 
 The bootstrap administrator configured with `VA_REVIEW_USERNAME` and
 `VA_REVIEW_PASSWORD` can open **Users** to create, reset, enable, or disable

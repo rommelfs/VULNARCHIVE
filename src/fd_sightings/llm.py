@@ -80,7 +80,13 @@ class LLMMatcher:
             "body": message.body[:12000],
             "published": message.published,
             "product_hint": extraction.product_hint,
+            "vendor_hint": extraction.vendor_hint,
+            "component_hint": extraction.component_hint,
+            "product_aliases": extraction.product_aliases,
             "affected_versions": extraction.affected_versions,
+            "version_constraints": extraction.version_constraints,
+            "fixed_versions": extraction.fixed_versions,
+            "commits": extraction.commits,
             "vulnerability_types": extraction.vulnerability_types,
             "cwe_ids": extraction.cwe_ids,
         }

@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS analysis_events (
     context_json TEXT NOT NULL DEFAULT '{}',
     candidates_json TEXT NOT NULL DEFAULT '[]',
     deterministic_json TEXT NOT NULL DEFAULT '[]',
+    excluded_json TEXT NOT NULL DEFAULT '[]',
     llm_output_json TEXT NOT NULL DEFAULT '{}',
     result_json TEXT NOT NULL DEFAULT '[]',
     error TEXT NOT NULL DEFAULT '',
@@ -310,6 +311,9 @@ class Store:
             WHERE o.reviewed_at IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM review_events e WHERE e.source_url=o.source_url)"""
         )
+        analysis_columns = {row[1] for row in self.db.execute("PRAGMA table_info(analysis_events)")}
+        if "excluded_json" not in analysis_columns:
+            self.db.execute("ALTER TABLE analysis_events ADD COLUMN excluded_json TEXT NOT NULL DEFAULT '[]'")
         publication_columns = {row[1] for row in self.db.execute("PRAGMA table_info(automatic_publications)")}
         for name in ("reserved_at", "published_at"):
             if name not in publication_columns:
@@ -955,8 +959,8 @@ class Store:
             """INSERT INTO analysis_events
             (source_url, trigger_name, provider, model, prompt_version, input_sha256,
              response_id, retrieval_at, context_json, candidates_json, deterministic_json,
-             llm_output_json, result_json, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             excluded_json, llm_output_json, result_json, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 source_url, trigger_name, str(analysis.get("provider") or ""),
                 str(analysis.get("model") or ""), str(analysis.get("prompt_version") or ""),
@@ -965,6 +969,7 @@ class Store:
                 json.dumps({"semantic": analysis.get("semantic"), "explicit_ids": analysis.get("explicit_ids") or []}),
                 json.dumps(analysis.get("candidates") or []),
                 json.dumps(analysis.get("deterministic_matches") or []),
+                json.dumps(analysis.get("excluded_candidates") or []),
                 json.dumps(analysis.get("llm_output") or {}),
                 json.dumps(analysis.get("result") or []), str(analysis.get("error") or "")[:2000],
             ),
@@ -981,7 +986,7 @@ class Store:
         events = []
         for row in rows:
             event = dict(row)
-            for name in ("context_json", "candidates_json", "deterministic_json", "llm_output_json", "result_json"):
+            for name in ("context_json", "candidates_json", "deterministic_json", "excluded_json", "llm_output_json", "result_json"):
                 event[name.removesuffix("_json")] = json.loads(str(event.pop(name)))
             events.append(event)
         return events

@@ -202,10 +202,48 @@ class ParserTests(unittest.TestCase):
     def test_structured_version_extraction(self):
         result = extract(Message(
             "https://example.test/advisory", "Widget buffer overflow",
-            body="Widget versions before 2.4.1 permit a buffer overflow.",
+            body="""Vendor: Example Corp
+Product: Widget Server
+Component: HTTP parser
+Aliases: WidgetS, WS
+Widget versions before 2.4.1 permit a buffer overflow.
+Fixed in version 2.4.2 by commit abcdef123456.""",
         ))
         self.assertEqual(result.affected_versions, ["2.4.1"])
+        self.assertEqual(result.vendor_hint, "Example Corp")
+        self.assertEqual(result.product_hint, "Widget Server")
+        self.assertEqual(result.component_hint, "HTTP parser")
+        self.assertEqual(result.product_aliases, ["WS", "WidgetS"])
+        self.assertEqual(result.version_constraints, [{"operator": "before", "version": "2.4.1"}])
+        self.assertEqual(result.fixed_versions, ["2.4.2"])
+        self.assertEqual(result.commits, ["abcdef123456"])
         self.assertEqual(result.vulnerability_types, ["buffer-overflow"])
+
+    def test_hard_identity_conflicts_are_excluded_before_llm(self):
+        class CandidateClient:
+            def get_json(self, url, params=None):
+                return [{
+                    "cveMetadata": {"vulnId": "CVE-2026-9999"},
+                    "containers": {"cna": {
+                        "title": "Other product code execution",
+                        "affected": [{"vendor": "Other Corp", "product": "Other Product",
+                                      "versions": [{"version": "9.0"}]}],
+                    }},
+                }]
+
+        lookup = VulnerabilityLookup(CandidateClient(), "https://vuln.example")
+        extraction = Extraction(
+            product_hint="Widget Server", vendor_hint="Example Corp",
+            component_hint="HTTP parser", affected_versions=["2.4.1"], relevant=True,
+        )
+        matches = lookup.match(Message("source", "Widget Server RCE"), extraction)
+        self.assertEqual(matches, [])
+        excluded = lookup.last_analysis["excluded_candidates"]
+        self.assertEqual(excluded[0]["vulnerability_id"], "CVE-2026-9999")
+        self.assertEqual(set(excluded[0]["reasons"]), {
+            "different-product", "different-vendor", "different-component",
+            "non-overlapping-versions",
+        })
 
     def test_candidate_match_records_evidence_and_caps_cwe_contradiction(self):
         class CandidateClient:

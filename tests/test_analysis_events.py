@@ -22,6 +22,7 @@ class AnalysisEventTests(unittest.TestCase):
                     "semantic": True, "explicit_ids": [],
                     "candidates": [{"cveMetadata": {"vulnId": "CVE-2026-1234"}}],
                     "deterministic_matches": [Match("CVE-2026-1234", "candidate", .8).as_dict()],
+                    "excluded_candidates": [{"vulnerability_id": "CVE-2026-9999", "reasons": ["different-product"]}],
                     "llm_output": {"candidate_id": "CVE-2026-1234", "confidence": .96},
                     "result": [Match("CVE-2026-1234", "llm-assisted", .91).as_dict()],
                 }
@@ -33,6 +34,7 @@ class AnalysisEventTests(unittest.TestCase):
                 self.assertEqual(events[0]["response_id"], "resp_2")
                 self.assertEqual(events[0]["context"], {"semantic": True, "explicit_ids": []})
                 self.assertEqual(events[0]["llm_output"]["confidence"], .96)
+                self.assertEqual(events[0]["excluded"][0]["reasons"], ["different-product"])
                 self.assertEqual(events[0]["candidates"][0]["cveMetadata"]["vulnId"], "CVE-2026-1234")
             finally:
                 store.close()

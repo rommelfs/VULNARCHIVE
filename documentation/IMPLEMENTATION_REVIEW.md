@@ -72,12 +72,15 @@ Vorhanden sind:
 Ein append-only Analyseprotokoll speichert inzwischen Retrieval-Zeitpunkt,
 vollständigen begrenzten Kandidatensatz, deterministische und finale Matches,
 Provider, Modell, Promptversion, Input-Hash, Response-ID, strukturierten
-LLM-Output und Fehler pro Import beziehungsweise Reprocessing. Noch offen sind
-belastbare Vendor-/Komponenten-/Alias- und Fixed-Version-
-Extraktion, breiteres und gecachtes Retrieval, starke Chronologie- und
-Versionswidersprüche sowie eine gelabelte Evaluation mit festgelegtem
-Präzisionsziel. `automatic` sollte bis zur Evaluation und Datenschutzfreigabe
-gesperrt bleiben.
+LLM-Output und Fehler pro Import beziehungsweise Reprocessing. Gelabelte
+Vendor-, Produkt-, Komponenten-, Alias-, Versionsbereich-, Fixed-Version- und
+Commit-Angaben werden strukturiert extrahiert. Kandidaten mit deterministischen
+Produkt-, Vendor-, Komponenten- oder Versionswidersprüchen werden vor dem LLM
+ausgeschlossen und mit Begründung protokolliert; chronologisch spätere
+Kandidaten werden als Widerspruch markiert. Noch offen sind unstrukturierte
+Aliasauflösung, semantisch belastbare Versionsbereichsvergleiche, breiteres
+Retrieval sowie eine gelabelte Evaluation mit festgelegtem Präzisionsziel.
+`automatic` sollte bis zur Evaluation und Datenschutzfreigabe gesperrt bleiben.
 
 ### 4. Manueller Approval-Prozess — teilweise
 

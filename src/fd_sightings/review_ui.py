@@ -548,10 +548,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
             for match in matches
         )
         evidence = "".join(f"<li>{_e(item)}</li>" for item in extraction.get("poc_evidence", []))
+        structured = " · ".join(filter(None, (
+            f"Vendor: {extraction.get('vendor_hint')}" if extraction.get("vendor_hint") else "",
+            f"Component: {extraction.get('component_hint')}" if extraction.get("component_hint") else "",
+            f"Fixed: {', '.join(extraction.get('fixed_versions', []))}" if extraction.get("fixed_versions") else "",
+        )))
         content = f"""<p><a href="/">← Queue</a></p><div class="grid"><section>
 <div class="panel"><h1>{_e(row['title'])}</h1><p class="muted">{_e(row['author'])} · {_e(row['published'])}</p>
 <p><a href="{_e(row['source_url'])}" target="_blank" rel="noreferrer">Open original source</a> · {_e(row.get('source_id', 'full-disclosure'))}</p>
 <h3>Extraction</h3><p>Product: <strong>{_e(extraction.get('product_hint',''))}</strong> · Proposed type: <strong>{_e(extraction.get('proposed_type',''))}</strong> · PoC score: <strong>{_e(extraction.get('poc_score',0))}</strong></p><ul>{evidence or '<li>No PoC indicators</li>'}</ul>
+<p class="muted">{_e(structured or 'No structured vendor/component/fix metadata.')}</p>
 <h3>Candidate analysis</h3><ul>{match_analysis or '<li>No candidates</li>'}</ul>
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
 	<p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
