@@ -20,6 +20,9 @@ def _public_layout(title: str, content: str) -> bytes:
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{_e(title)} · VULNARCHIVE</title>
 <style>body{{max-width:960px;margin:2rem auto;padding:0 1rem;font:16px/1.5 system-ui,sans-serif;color:#1d242c}}
 a{{color:#315e52}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:1rem}}
+.panel{{margin:2rem 0}}.card{{margin:1.5rem 0;padding:1rem 1.25rem;border:1px solid #dfe3e5;border-radius:.4rem;background:#fafbfb}}
+.card h2{{margin-top:0}}.links{{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;padding:0;list-style:none}}
+.highlight{{border-left:.3rem solid #315e52;padding-left:1rem}}
 .months,.pagination{{display:flex;flex-wrap:wrap;gap:.5rem 1rem;padding:0;list-style:none}}
 .archive-list{{list-style:none;padding:0}}.archive-list li{{display:grid;grid-template-columns:7rem 1fr;gap:1rem;padding:.45rem 0;border-bottom:1px solid #e5e7e9}}
 time{{color:#59636e}}.muted{{color:#59636e}}@media(max-width:560px){{.archive-list li{{grid-template-columns:1fr;gap:0}}}}</style>
@@ -84,7 +87,36 @@ class PublicHandler(BaseHTTPRequestHandler):
 <p>Public mailing-list archive and GCVE publication feed for GNA 1988.</p>
 <ul><li><a href=\"/api/gcve/publication\">GCVE publication API</a></li>
 <li><a href=\"/dumps/gna-1988.ndjson\">GNA 1988 NDJSON dump</a></li>
-<li><a href=\"/archive/\">Mailing-list archive</a></li></ul></div>""")
+<li><a href=\"/archive/\">Mailing-list archive</a></li></ul>
+
+<section class=\"card\"><h2>GCVE and Best Current Practices</h2>
+<p><a href=\"https://gcve.eu/\" rel=\"noreferrer\">GCVE</a> is a decentralized vulnerability
+enumeration system. Its community-driven <a href=\"https://gcve.eu/bcp/\" rel=\"noreferrer\">Best Current
+Practices (BCPs)</a> document recommended procedures, configurations, and operational principles so
+GCVE Numbering Authorities (GNAs), users, automation, and data consumers can interoperate reliably.</p>
+<p>BCPs are descriptive rather than prescriptive, consensus-based, focused on interoperability and
+trust, and evolve as tools and practices improve. Topics include directory integrity, GNA and identifier
+naming, secure publication and synchronization, APIs, and distributed publication. Adoption is not
+mandatory, but is strongly recommended for safe and compatible participation in the GCVE network.</p>
+<ul class=\"links\"><li><a href=\"https://gcve.eu/bcp/\" rel=\"noreferrer\">Read the GCVE BCPs</a></li>
+<li><a href=\"https://github.com/GCVE-EU\" rel=\"noreferrer\">GCVE on GitHub</a></li></ul></section>
+
+<section class=\"card\"><h2>Vulnerability-Lookup</h2>
+<p class=\"highlight\"><a href=\"https://www.vulnerability-lookup.org/\" rel=\"noreferrer\">Vulnerability-Lookup</a>
+enables rapid correlation of vulnerabilities across multiple sources, independent of vulnerability
+identifiers. The public service is available at <a href=\"https://vulnerability.circl.lu\" rel=\"noreferrer\">vulnerability.circl.lu</a>.</p>
+<p>Its built-in Vulnogram integration streamlines Coordinated Vulnerability Disclosure (CVD), supports
+both <a href=\"https://github.com/CVEProject/cve-schema/blob/main/README.md\" rel=\"noreferrer\">CVE 5.2</a>
+and <a href=\"https://gcve.eu/bcp/gcve-bcp-05/\" rel=\"noreferrer\">GCVE-BCP-05</a>, and lets CNAs and GNAs
+publish advisories and <a href=\"https://gcve.eu/bcp/gcve-bcp-03/\" rel=\"noreferrer\">synchronize with other
+instances</a> regardless of identifier format.</p>
+<ul class=\"links\"><li><a href=\"https://vulnerability.circl.lu\" rel=\"noreferrer\">Open the public instance</a></li>
+<li><a href=\"https://github.com/cve-search/vulnerability-lookup\" rel=\"noreferrer\">Vulnerability-Lookup on GitHub</a></li></ul></section>
+
+<section class=\"card\"><h2>VULNARCHIVE</h2>
+<p>Following Vulnerability-Lookup, VULNARCHIVE is the second reference implementation of the GCVE BCPs.</p>
+<ul class=\"links\"><li><a href=\"https://github.com/rommelfs/VULNARCHIVE\" rel=\"noreferrer\">VULNARCHIVE on GitHub</a></li></ul>
+</section></div>""")
             self._send(body, "text/html; charset=utf-8")
         elif parsed.path == "/api/gcve/publication":
             status, body = publication_response(self.server.store, parsed.query)
