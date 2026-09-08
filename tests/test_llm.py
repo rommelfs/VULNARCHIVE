@@ -45,6 +45,10 @@ class LLMMatcherTests(unittest.TestCase):
             [self.record],
         )
         self.assertEqual(decision.candidate_id, "CVE-2026-1234")
+        self.assertEqual(decision.prompt_version, "vulnerability-match-v1")
+        self.assertEqual(decision.provider, "openai-responses-compatible")
+        self.assertEqual(decision.output["confidence"], 0.96)
+        self.assertEqual(decision.candidates[0]["id"], "CVE-2026-1234")
         self.assertEqual(decision.response_id, "resp_test")
         _, request = client.calls[0]
         self.assertFalse(request["json_body"]["store"])
