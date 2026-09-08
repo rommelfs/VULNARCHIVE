@@ -165,7 +165,16 @@ The observation detail page shows the decision time, authenticated reviewer,
 state, selected vulnerability IDs, Sighting type, and note. The fields on the
 observation remain the current-state projection used by queue queries.
 
-The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
+The bootstrap administrator configured with `VA_REVIEW_USERNAME` and
+`VA_REVIEW_PASSWORD` can open **Users** to create, reset, enable, or disable
+database-backed reviewer and administrator accounts. Managed passwords are
+stored as salted PBKDF2-SHA256 hashes. Once at least one managed account exists,
+it can authenticate even if the bootstrap credentials are later removed.
+Administrators can optionally enable the four-eyes policy: the first approval
+then remains pending until a different authenticated reviewer approves the same
+observation. The policy is disabled by default.
+
+The review interface has no external connection settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
 After approval, the observation links directly to the publication action. Once
 published, that action is replaced by a link to the public record at

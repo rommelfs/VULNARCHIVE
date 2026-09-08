@@ -92,8 +92,11 @@ Publikationsaktion. Netzwerk-Allowlist, Basic Auth und CSRF-Schutz sind vorhande
 Eine append-only Entscheidungshistorie speichert inzwischen Einzel- und
 Batch-Entscheidungen einschließlich authentifiziertem Reviewer, IDs, Sighting-Typ
 und Notiz; die Detailansicht zeigt diese Historie. Batch-Aktionen und eine
-paginierte Queue sind ebenfalls vorhanden. Für ein Endprodukt fehlen weiterhin
-Reviewer-Rollen, Vier-Augen-Option und Claiming/Zuweisung.
+paginierte Queue sind ebenfalls vorhanden. Reviewer- und Administrator-Konten
+können über die geschützte Web-UI verwaltet
+werden; ein optionales Vier-Augen-Prinzip verlangt zwei unterschiedliche
+Reviewer. Für ein Endprodukt fehlen weiterhin Claiming/Zuweisung und eine
+feinere Berechtigungsmatrix.
 Außerdem sollte ein expliziter Zustandsautomat verhindern, dass Reprocessing,
 Approval und automatische Jobs einander semantisch überschreiben. Ein
 unveränderliches Match-/LLM-Ereignisprotokoll muss neben der finalen Entscheidung

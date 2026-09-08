@@ -50,7 +50,7 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:14px
 .grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}label{{display:block;font-weight:600;margin:12px 0 5px}}textarea{{width:100%;min-height:90px}}
 .range-filter{{display:grid;grid-template-columns:auto minmax(120px,1fr);gap:2px 8px;align-items:center;padding:4px 8px;border:1px solid #aaa;border-radius:6px}}.range-filter label{{margin:0;font-size:12px}}.range-filter input{{padding:0;border:0}}
 @media(max-width:800px){{.grid{{grid-template-columns:1fr}}table{{display:block;overflow:auto}}}}
-</style><script src="/review.js" defer></script></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a></div></header><main id="content" style="display:block;visibility:visible;opacity:1">{content}</main></body></html>"""
+</style><script src="/review.js" defer></script></head><body><header><div class="toolbar"><a href="/"><strong>VULNARCHIVE</strong></a><a href="/publish">Automatic publication</a><a href="/workers">Archive imports</a><a href="/users">Users</a></div></header><main id="content" style="display:block;visibility:visible;opacity:1">{content}</main></body></html>"""
     return page.encode("utf-8")
 
 
@@ -77,6 +77,8 @@ def _networks(value: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network
 
 class ReviewHandler(BaseHTTPRequestHandler):
     server: ReviewServer
+    review_actor = ""
+    review_role = ""
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -119,14 +121,20 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not any(client in network for network in self.server.allowed_networks):
             self._send(b"Forbidden", 403, "text/plain; charset=utf-8")
             return False
-        if not self.server.auth_username or not self.server.auth_password:
+        if (not self.server.auth_username or not self.server.auth_password) and not self.server.store.has_review_users():
             self._send(b"Review authentication is not configured", 503, "text/plain; charset=utf-8")
             return False
-        expected = base64.b64encode(
-            f"{self.server.auth_username}:{self.server.auth_password}".encode()
-        ).decode()
-        supplied = self.headers.get("Authorization", "")
-        if not secrets.compare_digest(supplied, f"Basic {expected}"):
+        try:
+            scheme, token = self.headers.get("Authorization", "").split(" ", 1)
+            username, password = base64.b64decode(token, validate=True).decode().split(":", 1)
+        except (ValueError, UnicodeDecodeError):
+            scheme, username, password = "", "", ""
+        role = self.server.store.authenticate_review_user(username, password) if scheme == "Basic" else None
+        if (role is None and self.server.auth_username and self.server.auth_password
+                and secrets.compare_digest(username, self.server.auth_username)
+                and secrets.compare_digest(password, self.server.auth_password)):
+            role = "admin"
+        if role is None:
             body = b"Authentication required"
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="VULNARCHIVE Review", charset="UTF-8"')
@@ -135,6 +143,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return False
+        self.review_actor = username
+        self.review_role = role
         return True
 
     def do_GET(self) -> None:
@@ -152,6 +162,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._publication_dashboard()
         elif parsed.path == "/workers":
             self._workers(params)
+        elif parsed.path == "/users":
+            self._users()
         elif parsed.path.startswith("/archive/full-disclosure/"):
             suffix = parsed.path.removeprefix("/archive/full-disclosure/").strip("/")
             self._archive_detail(f"https://seclists.org/fulldisclosure/{suffix}")
@@ -166,6 +178,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/workers":
             self._start_worker()
+            return
+        if self.path == "/users":
+            self._manage_users()
             return
         if self.path == "/bulk-review":
             self._bulk_review()
@@ -190,7 +205,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 selected_ids + custom_ids,
                 data.get("sighting_type", [""])[0],
                 data.get("note", [""])[0],
-                actor=self.server.auth_username,
+                actor=self.review_actor,
             )
         except ValueError as exc:
             self._send(_layout("Review error", f'<div class="panel"><h1>Review error</h1><p>{_e(exc)}</p></div>'), 400)
@@ -209,12 +224,58 @@ class ReviewHandler(BaseHTTPRequestHandler):
             sources = data.get("page_source", []) if action == "approve-page" else data.get("source", [])
             updated = self.server.store.review_many(
                 sources, state, data.get("note", [""])[0],
-                actor=self.server.auth_username,
+                actor=self.review_actor,
             )
         except (KeyError, ValueError) as exc:
             self._send(_layout("Bulk review error", f'<div class="panel"><h1>Bulk review failed</h1><p>{_e(exc)}</p><p><a href="/">Back</a></p></div>'), 400)
             return
-        self._send(_layout("Bulk review complete", f'<div class="panel"><h1>Bulk review complete</h1><p>Updated {_e(updated)} observations to <strong>{_e(state)}</strong>.</p><p><a href="/">Back to queue</a></p></div>'))
+        policy_note = " Under the four-eyes policy, first approvals remain pending until a different reviewer approves them." if state == "approved" and self.server.store.four_eyes_enabled() else ""
+        self._send(_layout("Bulk review complete", f'<div class="panel"><h1>Bulk review complete</h1><p>Recorded <strong>{_e(state)}</strong> for {_e(updated)} observations.{_e(policy_note)}</p><p><a href="/">Back to queue</a></p></div>'))
+
+    def _require_admin(self) -> bool:
+        if self.review_role == "admin":
+            return True
+        self._send(_layout("Forbidden", '<div class="panel"><h1>Administrator access required</h1></div>'), 403)
+        return False
+
+    def _users(self) -> None:
+        if not self._require_admin():
+            return
+        rows = "".join(
+            f"<tr><td>{_e(user['username'])}</td><td>{_e(user['role'])}</td><td>{'active' if user['active'] else 'disabled'}</td>"
+            f"<td><form method=\"post\" action=\"/users\"><input type=\"hidden\" name=\"csrf\" value=\"{_e(self.server.csrf_token)}\"><input type=\"hidden\" name=\"username\" value=\"{_e(user['username'])}\"><button class=\"secondary\" name=\"action\" value=\"{'disable' if user['active'] else 'enable'}\">{'Disable' if user['active'] else 'Enable'}</button></form></td></tr>"
+            for user in self.server.store.review_users()
+        )
+        checked = " checked" if self.server.store.four_eyes_enabled() else ""
+        content = f"""<div class="panel"><h1>Review users</h1><p>The environment account remains the bootstrap administrator. Database users can sign in with HTTP Basic authentication.</p>
+<table><thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Action</th></tr></thead><tbody>{rows or '<tr><td colspan="4">No managed users.</td></tr>'}</tbody></table></div>
+<div class="panel"><h2>Add or reset user</h2><form method="post" action="/users"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="action" value="save"><label>Username</label><input name="username" required minlength="2" maxlength="64"><label>Password (minimum 12 characters)</label><input type="password" name="password" required minlength="12"><label>Role</label><select name="role"><option value="reviewer">Reviewer</option><option value="admin">Administrator</option></select><p><button>Save user</button></p></form></div>
+<div class="panel"><h2>Approval policy</h2><form method="post" action="/users"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="action" value="settings"><label><input type="checkbox" name="four_eyes" value="1"{checked}> Require two different reviewers for approval</label><p class="muted">Optional. The first approval remains pending; a second authenticated user must approve it.</p><button>Save policy</button></form></div>"""
+        self._send(_layout("Review users", content))
+
+    def _manage_users(self) -> None:
+        if not self._require_admin():
+            return
+        data = self._form_data()
+        if data is None:
+            return
+        action = data.get("action", [""])[0]
+        username = data.get("username", [""])[0]
+        try:
+            if action == "save":
+                self.server.store.save_review_user(username, data.get("password", [""])[0], data.get("role", ["reviewer"])[0])
+            elif action in {"enable", "disable"}:
+                if username == self.review_actor and action == "disable":
+                    raise ValueError("you cannot disable your own account")
+                self.server.store.set_review_user_active(username, action == "enable")
+            elif action == "settings":
+                self.server.store.set_four_eyes(data.get("four_eyes", [""])[0] == "1")
+            else:
+                raise ValueError("unsupported user action")
+        except ValueError as exc:
+            self._send(_layout("User error", f'<div class="panel"><h1>User update failed</h1><p>{_e(exc)}</p></div>'), 400)
+            return
+        self._redirect("/users")
 
     def _form_data(self) -> dict[str, list[str]] | None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -453,12 +514,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
         chosen = set(row["reviewed_vulnerability_ids"] or
                      [match["vulnerability_id"] for match in matches])
         sighting_type = str(row["reviewed_sighting_type"] or extraction.get("proposed_type", "seen"))
+        history = self.server.store.review_events(source)
         history_rows = "".join(
             f"<tr><td>{_e(event['created_at'])}</td><td>{_e(event['actor'] or 'unknown')}</td>"
             f"<td class=\"{_e(event['review_state'])}\">{_e(event['review_state'])}</td>"
             f"<td>{_e(', '.join(event['vulnerability_ids']) or '—')}</td>"
             f"<td>{_e(event['sighting_type'] or '—')}</td><td>{_e(event['note'] or '—')}</td></tr>"
-            for event in self.server.store.review_events(source)
+            for event in history
+        )
+        four_eyes_notice = (
+            '<p class="pending"><strong>Awaiting approval by a second reviewer.</strong></p>'
+            if self.server.store.four_eyes_enabled() and row["review_state"] == "pending"
+            and history and history[0]["review_state"] == "approved" else ""
         )
         match_cards = "".join(
             f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] in chosen else ""}>'
@@ -478,7 +545,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <h3>Extraction</h3><p>Product: <strong>{_e(extraction.get('product_hint',''))}</strong> · Proposed type: <strong>{_e(extraction.get('proposed_type',''))}</strong> · PoC score: <strong>{_e(extraction.get('poc_score',0))}</strong></p><ul>{evidence or '<li>No PoC indicators</li>'}</ul>
 <h3>Candidate analysis</h3><ul>{match_analysis or '<li>No candidates</li>'}</ul>
 <h3>Original body</h3><pre>{_e(row['body'])}</pre></div></section><aside><div class="panel"><h2>Decision</h2>
-<p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
+	<p>Current state: <strong class="{_e(row['review_state'])}">{_e(row['review_state'])}</strong></p>
+	{four_eyes_notice}
 <form method="post" action="/review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="source" value="{_e(source)}">
 <label>Referenced vulnerabilities (zero, one, or multiple)</label><select name="vulnerability_id" multiple size="6" style="width:100%">{match_cards}</select>
 <p class="muted">Leave empty for a new advisory without a referenced ID. Use Ctrl/Cmd to select multiple entries.</p>

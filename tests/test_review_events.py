@@ -9,6 +9,28 @@ from fd_sightings.store import Store
 
 
 class ReviewEventTests(unittest.TestCase):
+    def test_managed_users_and_optional_four_eyes_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "users.sqlite")
+            try:
+                store.save_review_user("alice", "correct horse battery", "admin")
+                store.save_review_user("bob", "another correct horse", "reviewer")
+                self.assertEqual(store.authenticate_review_user("alice", "correct horse battery"), "admin")
+                self.assertIsNone(store.authenticate_review_user("alice", "wrong password"))
+                store.set_four_eyes(True)
+                source = "https://example.test/four-eyes"
+                store.save(Message(source, "Advisory"), Extraction(relevant=True), [])
+                store.review(source, "approved", [], "seen", actor="alice")
+                self.assertEqual(store.get(source)["review_state"], "pending")
+                store.review(source, "approved", [], "seen", actor="alice")
+                self.assertEqual(store.get(source)["review_state"], "pending")
+                store.review(source, "approved", [], "seen", actor="bob")
+                self.assertEqual(store.get(source)["review_state"], "approved")
+                store.set_review_user_active("bob", False)
+                self.assertIsNone(store.authenticate_review_user("bob", "another correct horse"))
+            finally:
+                store.close()
+
     def test_decisions_are_append_only_and_current_state_is_projected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / "events.sqlite")

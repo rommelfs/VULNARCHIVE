@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +65,18 @@ CREATE TABLE IF NOT EXISTS review_events (
 );
 CREATE INDEX IF NOT EXISTS review_events_source_idx
     ON review_events (source_url, event_id DESC);
+CREATE TABLE IF NOT EXISTS review_users (
+    username TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'reviewer')),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS review_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS automatic_publications (
     source_url TEXT NOT NULL,
     publication_key TEXT NOT NULL,
@@ -121,6 +136,77 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
         self._migrate()
+
+    @staticmethod
+    def _password_hash(password: str) -> str:
+        if len(password) < 12:
+            raise ValueError("password must contain at least 12 characters")
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
+        return "pbkdf2_sha256$600000$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(digest).decode()
+
+    def save_review_user(self, username: str, password: str, role: str = "reviewer") -> None:
+        username = username.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.@-]{2,64}", username):
+            raise ValueError("username must contain 2-64 safe characters")
+        if role not in {"admin", "reviewer"}:
+            raise ValueError("invalid user role")
+        encoded = self._password_hash(password)
+        self.db.execute(
+            """INSERT INTO review_users(username,password_hash,role,active) VALUES(?,?,?,1)
+            ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash,
+            role=excluded.role, active=1, updated_at=CURRENT_TIMESTAMP""",
+            (username, encoded, role),
+        )
+        self.db.commit()
+
+    def authenticate_review_user(self, username: str, password: str) -> str | None:
+        row = self.db.execute(
+            "SELECT password_hash, role FROM review_users WHERE username=? AND active=1", (username,),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            algorithm, rounds, salt, expected = str(row[0]).split("$")
+            if algorithm != "pbkdf2_sha256":
+                return None
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), base64.b64decode(salt), int(rounds),
+            )
+            return str(row[1]) if hmac.compare_digest(actual, base64.b64decode(expected)) else None
+        except (ValueError, TypeError):
+            return None
+
+    def review_users(self) -> list[dict[str, object]]:
+        self.db.row_factory = sqlite3.Row
+        return [dict(row) for row in self.db.execute(
+            "SELECT username, role, active, created_at, updated_at FROM review_users ORDER BY username COLLATE NOCASE"
+        )]
+
+    def has_review_users(self) -> bool:
+        return self.db.execute("SELECT 1 FROM review_users WHERE active=1 LIMIT 1").fetchone() is not None
+
+    def set_review_user_active(self, username: str, active: bool) -> None:
+        cursor = self.db.execute(
+            "UPDATE review_users SET active=?, updated_at=CURRENT_TIMESTAMP WHERE username=?",
+            (int(active), username),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("review user not found")
+        self.db.commit()
+
+    def four_eyes_enabled(self) -> bool:
+        row = self.db.execute(
+            "SELECT setting_value FROM review_settings WHERE setting_key='four_eyes'"
+        ).fetchone()
+        return bool(row and row[0] == "1")
+
+    def set_four_eyes(self, enabled: bool) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO review_settings(setting_key, setting_value) VALUES('four_eyes', ?)",
+            ("1" if enabled else "0",),
+        )
+        self.db.commit()
 
     def _migrate(self) -> None:
         record_columns = {row[1] for row in self.db.execute("PRAGMA table_info(gcve_records)")}
@@ -732,13 +818,14 @@ class Store:
         identifiers = list(dict.fromkeys(value.strip().upper() for value in candidates if value.strip()))
         if state == "approved" and sighting_type not in {"seen", "published-proof-of-concept"}:
             raise ValueError("approved observations require a valid sighting type")
+        projected_state = self._projected_review_state(source_url, state, actor)
         try:
             self.db.execute("BEGIN IMMEDIATE")
             cursor = self.db.execute(
                 """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
                 reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
                 WHERE source_url=?""",
-                (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                (projected_state, identifiers[0] if identifiers else "", json.dumps(identifiers),
                  sighting_type, note[:2000], source_url),
             )
             if cursor.rowcount != 1:
@@ -774,11 +861,12 @@ class Store:
                 sighting_type = str(extraction.get("proposed_type") or "seen") if state == "approved" else ""
                 if sighting_type not in {"seen", "published-proof-of-concept"}:
                     sighting_type = "seen"
+                projected_state = self._projected_review_state(source_url, state, actor)
                 cursor = self.db.execute(
                     """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?,
                     reviewed_vulnerability_ids_json=?, reviewed_sighting_type=?, review_note=?,
                     reviewed_at=CURRENT_TIMESTAMP WHERE source_url=?""",
-                    (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                    (projected_state, identifiers[0] if identifiers else "", json.dumps(identifiers),
                      sighting_type, note[:2000], source_url),
                 )
                 updated += cursor.rowcount
@@ -788,6 +876,21 @@ class Store:
             self.db.rollback()
             raise
         return updated
+
+    def _projected_review_state(self, source_url: str, requested: str, actor: str) -> str:
+        if requested != "approved" or not self.four_eyes_enabled():
+            return requested
+        if not actor:
+            raise ValueError("four-eyes approval requires an authenticated reviewer")
+        barrier = self.db.execute(
+            """SELECT COALESCE(MAX(event_id), 0) FROM review_events
+            WHERE source_url=? AND review_state<>'approved'""", (source_url,),
+        ).fetchone()[0]
+        prior = self.db.execute(
+            """SELECT 1 FROM review_events WHERE source_url=? AND review_state='approved'
+            AND event_id>? AND actor<>? AND actor<>'' LIMIT 1""", (source_url, barrier, actor),
+        ).fetchone()
+        return "approved" if prior else "pending"
 
     def _record_review_event(
         self, source_url: str, state: str, identifiers: list[str],

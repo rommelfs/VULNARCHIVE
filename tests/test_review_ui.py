@@ -71,6 +71,43 @@ class ReviewUITest(unittest.TestCase):
             urllib.request.urlopen(request)
         self.assertEqual(raised.exception.code, 404)
 
+    def test_admin_manages_review_users_and_optional_four_eyes_policy(self) -> None:
+        with urllib.request.urlopen(self.request("/users")) as response:
+            page = response.read().decode()
+        self.assertIn("Review users", page)
+        self.assertIn("Require two different reviewers", page)
+
+        encoded = urllib.parse.urlencode({
+            "csrf": self.server.csrf_token, "action": "save", "username": "second",
+            "password": "second horse battery", "role": "reviewer",
+        }).encode()
+        request = self.request("/users", method="POST")
+        request.data = encoded
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        with self.assertRaises(urllib.error.HTTPError) as redirected:
+            urllib.request.build_opener(NoRedirect()).open(request)
+        self.assertEqual(redirected.exception.code, 303)
+        with urllib.request.urlopen(self.request("/users")) as response:
+            self.assertIn("second", response.read().decode())
+
+        token = base64.b64encode(b"second:second horse battery").decode()
+        self.server.auth_username = ""
+        self.server.auth_password = ""
+        managed = urllib.request.Request(
+            self.base + "/", headers={"X-Forwarded-For": "192.0.2.10", "Authorization": f"Basic {token}"},
+        )
+        with urllib.request.urlopen(managed) as response:
+            self.assertEqual(response.status, 200)
+        forbidden = urllib.request.Request(
+            self.base + "/users", headers={"X-Forwarded-For": "192.0.2.10", "Authorization": f"Basic {token}"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(forbidden)
+        self.assertEqual(raised.exception.code, 403)
+
     def test_review_queue_paginates_and_sorts_by_confidence(self) -> None:
         from fd_sightings.models import Match
         for number, confidence in ((1, .2), (2, .9), (3, .5)):
@@ -128,7 +165,7 @@ class ReviewUITest(unittest.TestCase):
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
         with urllib.request.urlopen(request) as response:
             page = response.read().decode()
-        self.assertIn("Updated 2 observations", page)
+        self.assertIn("Recorded <strong>approved</strong> for 2 observations", page)
         self.assertEqual(self.store.get(selected[0])["review_state"], "approved")
         self.assertEqual(self.store.get(selected[0])["reviewed_vulnerability_ids"], ["CVE-2026-1000"])
         self.assertEqual(self.store.get(selected[1])["review_state"], "approved")
@@ -147,7 +184,7 @@ class ReviewUITest(unittest.TestCase):
         request.data = encoded
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
         with urllib.request.urlopen(request) as response:
-            self.assertIn("Updated 3 observations", response.read().decode())
+            self.assertIn("Recorded <strong>approved</strong> for 3 observations", response.read().decode())
         self.assertEqual(self.store.get(selected[2])["review_state"], "approved")
         self.assertEqual(self.store.review_events(selected[2])[0]["actor"], "analyst")
 
