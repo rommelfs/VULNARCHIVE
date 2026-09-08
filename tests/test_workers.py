@@ -25,7 +25,10 @@ class ImportWorkerManagerTests(unittest.TestCase):
                 return Result()
 
             with patch("fd_sightings.workers.subprocess.run", side_effect=run):
-                job = manager.submit("2024-01", "2024-03", limit=25, semantic=False, refresh=True)
+                job = manager.submit(
+                    "2024-01", "2024-03", limit=25, semantic=False, refresh=True,
+                    sources=["full-disclosure", "bugtraq"],
+                )
                 manager.executor.shutdown(wait=True)
 
             stored = json.loads((database.parent / "workers" / f'{job["id"]}.json').read_text())
@@ -33,9 +36,11 @@ class ImportWorkerManagerTests(unittest.TestCase):
             command = captured[0]
             self.assertIn("--no-semantic", command)
             self.assertIn("--refresh", command)
-            self.assertEqual(command[-7:], [
-                "archive", "--from-period", "2024-01", "--to-period", "2024-03", "--limit", "25",
+            self.assertEqual(command[-11:], [
+                "archive", "--from-period", "2024-01", "--to-period", "2024-03",
+                "--source", "full-disclosure", "--source", "bugtraq", "--limit", "25",
             ])
+            self.assertEqual(stored["sources"], ["full-disclosure", "bugtraq"])
             self.assertNotIn("sync", command)
             self.assertNotIn("publish-auto", command)
 
@@ -47,6 +52,10 @@ class ImportWorkerManagerTests(unittest.TestCase):
                     manager.submit(start, end)
             with self.assertRaises(ValueError):
                 manager.submit("2024-01", "2024-02", limit=10001)
+            with self.assertRaises(ValueError):
+                manager.submit("2024-01", "2024-02", sources=[])
+            with self.assertRaises(ValueError):
+                manager.submit("2024-01", "2024-02", sources=["unknown"])
             now = datetime.now(timezone.utc)
             future = f"{now.year + 1:04d}-01"
             with self.assertRaises(ValueError):

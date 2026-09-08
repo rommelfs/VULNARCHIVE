@@ -68,6 +68,28 @@ class ReviewUITest(unittest.TestCase):
             urllib.request.urlopen(request)
         self.assertEqual(raised.exception.code, 404)
 
+    def test_review_queue_paginates_and_sorts_by_confidence(self) -> None:
+        from fd_sightings.models import Match
+        for number, confidence in ((1, .2), (2, .9), (3, .5)):
+            self.store.save(
+                Message(f"https://example.test/{number}", f"Widget {number}", published=f"2026-09-0{number}"),
+                Extraction(relevant=True),
+                [Match(f"CVE-2026-{number:04d}", "candidate", confidence)],
+            )
+        query = urllib.parse.urlencode({"sort": "confidence", "order": "desc", "per_page": 2})
+        with urllib.request.urlopen(self.request("/?" + query)) as response:
+            page = response.read().decode()
+        self.assertLess(page.index("Widget 2"), page.index("Widget 3"))
+        self.assertNotIn("Widget 1", page)
+        self.assertIn("Page 1 of 2 · 3 observations", page)
+        self.assertIn('rel="next"', page)
+        self.assertIn("sort=confidence", page)
+
+    def test_review_queue_rejects_invalid_list_query(self) -> None:
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(self.request("/?sort=matches_json"))
+        self.assertEqual(raised.exception.code, 400)
+
     def test_authentication_and_forwarded_ip_filter(self) -> None:
         with self.assertRaises(urllib.error.HTTPError) as raised:
             urllib.request.urlopen(self.request("/", authenticated=False))
@@ -82,8 +104,8 @@ class ReviewUITest(unittest.TestCase):
             def __init__(self):
                 self.submitted = []
 
-            def submit(self, start, end, *, limit=0, semantic=False, refresh=False):
-                self.submitted.append((start, end, limit, semantic, refresh))
+            def submit(self, start, end, *, limit=0, semantic=False, refresh=False, sources=None):
+                self.submitted.append((start, end, limit, semantic, refresh, sources))
                 return {"id": "abc123"}
 
             def jobs(self):
@@ -107,6 +129,11 @@ class ReviewUITest(unittest.TestCase):
         self.assertEqual(page.count('type="month"'), 2)
         self.assertEqual(page.count('min="2002-01" max="'), 2)
         self.assertIn("Use the calendar controls", page)
+        self.assertIn("Import source configuration", page)
+        self.assertIn("only to the new historical worker", page)
+        self.assertIn("deliberately cannot edit", page)
+        self.assertIn('name="source" value="full-disclosure" checked', page)
+        self.assertIn('name="source" value="bugtraq"', page)
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,
@@ -115,7 +142,8 @@ class ReviewUITest(unittest.TestCase):
             "limit": "25",
             "semantic": "1",
             "refresh": "1",
-        }).encode()
+            "source": ["full-disclosure", "bugtraq"],
+        }, doseq=True).encode()
         request = self.request("/workers", method="POST")
         request.data = encoded
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -127,7 +155,10 @@ class ReviewUITest(unittest.TestCase):
             urllib.request.build_opener(NoRedirect()).open(request)
         self.assertEqual(redirected.exception.code, 303)
         self.assertIn("/review/workers?job=abc123", redirected.exception.headers["Location"])
-        self.assertEqual(workers.submitted, [("2024-01", "2024-03", 25, True, True)])
+        self.assertEqual(workers.submitted, [(
+            "2024-01", "2024-03", 25, True, True,
+            ["full-disclosure", "bugtraq"],
+        )])
         with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
             live_page = response.read().decode()
         self.assertIn('<meta http-equiv="refresh" content="2">', live_page)
