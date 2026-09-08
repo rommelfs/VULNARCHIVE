@@ -118,6 +118,10 @@ class ReviewUITest(unittest.TestCase):
         self.assertEqual(self.store.get(selected[0])["reviewed_vulnerability_ids"], ["CVE-2026-1000"])
         self.assertEqual(self.store.get(selected[1])["review_state"], "approved")
         self.assertEqual(self.store.get(selected[2])["review_state"], "pending")
+        events = self.store.review_events(selected[0])
+        self.assertEqual(events[0]["actor"], "analyst")
+        self.assertEqual(events[0]["review_state"], "approved")
+        self.assertEqual(events[0]["vulnerability_ids"], ["CVE-2026-1000"])
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,
@@ -130,6 +134,7 @@ class ReviewUITest(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             self.assertIn("Updated 3 observations", response.read().decode())
         self.assertEqual(self.store.get(selected[2])["review_state"], "approved")
+        self.assertEqual(self.store.review_events(selected[2])[0]["actor"], "analyst")
 
     def test_review_queue_rejects_invalid_list_query(self) -> None:
         with self.assertRaises(urllib.error.HTTPError) as raised:
@@ -233,6 +238,7 @@ class ReviewUITest(unittest.TestCase):
         with urllib.request.urlopen(self.request("/observation?" + urllib.parse.urlencode({"source": source}))) as response:
             approved = response.read().decode()
         self.assertIn("Publish this approved entry locally", approved)
+        self.assertIn("Decision history", approved)
         self.assertIn('href="/review/publish"', approved)
 
         record = {

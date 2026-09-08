@@ -49,6 +49,19 @@ CREATE TABLE IF NOT EXISTS submissions (
     submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (source_url, vulnerability_id, sighting_type)
 );
+CREATE TABLE IF NOT EXISTS review_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url TEXT NOT NULL,
+    review_state TEXT NOT NULL CHECK (review_state IN ('pending', 'approved', 'rejected')),
+    vulnerability_ids_json TEXT NOT NULL DEFAULT '[]',
+    sighting_type TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_url) REFERENCES observations(source_url) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS review_events_source_idx
+    ON review_events (source_url, event_id DESC);
 CREATE TABLE IF NOT EXISTS automatic_publications (
     source_url TEXT NOT NULL,
     publication_key TEXT NOT NULL,
@@ -179,6 +192,16 @@ class Store:
         self.db.execute(
             """UPDATE observations SET reviewed_vulnerability_ids_json=json_array(reviewed_vulnerability_id)
             WHERE reviewed_vulnerability_id<>'' AND reviewed_vulnerability_ids_json='[]'"""
+        )
+        self.db.execute(
+            """INSERT INTO review_events
+            (source_url, review_state, vulnerability_ids_json, sighting_type, note, actor, created_at)
+            SELECT o.source_url, o.review_state, o.reviewed_vulnerability_ids_json,
+                   o.reviewed_sighting_type, o.review_note, 'legacy-migration',
+                   COALESCE(o.reviewed_at, o.updated_at)
+            FROM observations o
+            WHERE o.reviewed_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM review_events e WHERE e.source_url=o.source_url)"""
         )
         publication_columns = {row[1] for row in self.db.execute("PRAGMA table_info(automatic_publications)")}
         for name in ("reserved_at", "published_at"):
@@ -697,7 +720,7 @@ class Store:
     def review(
         self, source_url: str, state: str,
         vulnerability_ids: str | list[str] | tuple[str, ...] = (),
-        sighting_type: str = "", note: str = "",
+        sighting_type: str = "", note: str = "", actor: str = "",
     ) -> None:
         if state not in {"pending", "approved", "rejected"}:
             raise ValueError("invalid review state")
@@ -705,14 +728,87 @@ class Store:
         identifiers = list(dict.fromkeys(value.strip().upper() for value in candidates if value.strip()))
         if state == "approved" and sighting_type not in {"seen", "published-proof-of-concept"}:
             raise ValueError("approved observations require a valid sighting type")
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            cursor = self.db.execute(
+                """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
+                reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
+                WHERE source_url=?""",
+                (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                 sighting_type, note[:2000], source_url),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("observation not found")
+            self._record_review_event(source_url, state, identifiers, sighting_type, note, actor)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def review_many(self, source_urls: list[str], state: str, note: str = "", actor: str = "") -> int:
+        """Apply one review decision to a bounded set of explicitly selected rows."""
+        sources = list(dict.fromkeys(value for value in source_urls if value))
+        if not sources or len(sources) > 100:
+            raise ValueError("select between 1 and 100 observations")
+        if state not in {"approved", "rejected", "pending"}:
+            raise ValueError("invalid bulk review state")
+        updated = 0
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            for source_url in sources:
+                row = self.get(source_url)
+                if not row:
+                    continue
+                extraction = dict(row.get("extraction") or {})
+                matches = list(row.get("matches") or [])
+                identifiers = list(dict.fromkeys(
+                    str(match.get("vulnerability_id") or "").strip().upper()
+                    for match in matches if isinstance(match, dict) and match.get("vulnerability_id")
+                )) if state == "approved" else []
+                sighting_type = str(extraction.get("proposed_type") or "seen") if state == "approved" else ""
+                if sighting_type not in {"seen", "published-proof-of-concept"}:
+                    sighting_type = "seen"
+                cursor = self.db.execute(
+                    """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?,
+                    reviewed_vulnerability_ids_json=?, reviewed_sighting_type=?, review_note=?,
+                    reviewed_at=CURRENT_TIMESTAMP WHERE source_url=?""",
+                    (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
+                     sighting_type, note[:2000], source_url),
+                )
+                updated += cursor.rowcount
+                self._record_review_event(source_url, state, identifiers, sighting_type, note, actor)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return updated
+
+    def _record_review_event(
+        self, source_url: str, state: str, identifiers: list[str],
+        sighting_type: str, note: str, actor: str,
+    ) -> None:
         self.db.execute(
-            """UPDATE observations SET review_state=?, reviewed_vulnerability_id=?, reviewed_vulnerability_ids_json=?,
-            reviewed_sighting_type=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP
-            WHERE source_url=?""",
-            (state, identifiers[0] if identifiers else "", json.dumps(identifiers),
-             sighting_type, note[:2000], source_url),
+            """INSERT INTO review_events
+            (source_url, review_state, vulnerability_ids_json, sighting_type, note, actor)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (source_url, state, json.dumps(identifiers), sighting_type, note[:2000], actor[:200]),
         )
-        self.db.commit()
+
+    def review_events(self, source_url: str) -> list[dict[str, object]]:
+        """Return the immutable decision history, newest event first."""
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            """SELECT event_id, review_state, vulnerability_ids_json, sighting_type,
+                      note, actor, created_at
+            FROM review_events WHERE source_url=? ORDER BY event_id DESC""",
+            (source_url,),
+        )
+        events = []
+        for row in rows:
+            event = dict(row)
+            event["vulnerability_ids"] = json.loads(str(event.pop("vulnerability_ids_json")))
+            events.append(event)
+        return events
 
     def review_many(self, source_urls: list[str], state: str, note: str = "") -> int:
         """Apply one review decision to a bounded set of explicitly selected rows."""

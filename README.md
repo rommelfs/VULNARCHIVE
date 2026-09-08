@@ -158,6 +158,11 @@ approve the current page (up to 100 observations per request). Bulk approval
 retains all candidate IDs for each row and uses its proposed Sighting type;
 publication remains a separate action.
 
+Every manual or bulk decision is also written to an append-only review history.
+The observation detail page shows the decision time, authenticated reviewer,
+state, selected vulnerability IDs, Sighting type, and note. The fields on the
+observation remain the current-state projection used by queue queries.
+
 The review interface has no connection or credential settings and performs no external writes. A review can select zero, one, or multiple referenced vulnerability IDs: no ID produces a new advisory, while every selected ID becomes a relationship in the local record. Approval records the decision but does not publish implicitly; the detail view then offers **Publish this approved entry locally**, while the publication dashboard handles batches. Both paths create BCP-05 records transactionally in the local store so Vulnerability-Lookup can retrieve them from the public BCP-03 endpoint.
 
 After approval, the observation links directly to the publication action. Once

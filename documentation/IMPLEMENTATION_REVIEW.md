@@ -89,9 +89,11 @@ IDs werden als `analyst-approved` in die Publikationsplanung übernommen.
 Approval publiziert nicht implizit, sondern erfordert eine nachgelagerte lokale
 Publikationsaktion. Netzwerk-Allowlist, Basic Auth und CSRF-Schutz sind vorhanden.
 
-Für ein Endprodukt fehlen eine append-only Entscheidungshistorie (aktuell steht
-im Beobachtungssatz nur der letzte Zustand), Reviewer-Identität/Rollen,
-Vier-Augen-Option, Claiming/Zuweisung, Batch-Aktionen und eine paginierte Queue.
+Eine append-only Entscheidungshistorie speichert inzwischen Einzel- und
+Batch-Entscheidungen einschließlich authentifiziertem Reviewer, IDs, Sighting-Typ
+und Notiz; die Detailansicht zeigt diese Historie. Batch-Aktionen und eine
+paginierte Queue sind ebenfalls vorhanden. Für ein Endprodukt fehlen weiterhin
+Reviewer-Rollen, Vier-Augen-Option und Claiming/Zuweisung.
 Außerdem sollte ein expliziter Zustandsautomat verhindern, dass Reprocessing,
 Approval und automatische Jobs einander semantisch überschreiben. Ein
 unveränderliches Match-/LLM-Ereignisprotokoll muss neben der finalen Entscheidung
@@ -179,6 +181,9 @@ Der erste vertikale Schnitt aus Phase 1 und Phase 4 ist umgesetzt: Ein
 validiertes `ListQuery` kapselt Filter, Sortierung, Richtung und Seitengröße. Die
 Review-Queue verwendet DB-seitiges Counting und Pagination, stabile Sortierung
 mit Allowlist sowie sortierbare Spalten für Titel, Confidence und Review-Status.
+Review-Entscheidungen werden zusätzlich append-only mit Reviewer und fachlichen
+Entscheidungsdaten protokolliert; der aktuelle Zustand bleibt als performante
+Projektion auf der Beobachtung bestehen.
 Der erste Schnitt aus Phase 2 ist ebenfalls umgesetzt: Source-Registry,
 Full-Disclosure-/Bugtraq-Adapter, wiederholbare CLI-Quellenauswahl, additive
 Source-Migration, Message-ID-Deduplizierung und generische Archivdetailrouten.

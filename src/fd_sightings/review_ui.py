@@ -176,6 +176,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 selected_ids + custom_ids,
                 data.get("sighting_type", [""])[0],
                 data.get("note", [""])[0],
+                self.server.auth_username,
             )
         except ValueError as exc:
             self._send(_layout("Review error", f'<div class="panel"><h1>Review error</h1><p>{_e(exc)}</p></div>'), 400)
@@ -193,7 +194,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             state = states[action]
             sources = data.get("page_source", []) if action == "approve-page" else data.get("source", [])
             updated = self.server.store.review_many(
-                sources, state, data.get("note", [""])[0]
+                sources, state, data.get("note", [""])[0], self.server.auth_username
             )
         except (KeyError, ValueError) as exc:
             self._send(_layout("Bulk review error", f'<div class="panel"><h1>Bulk review failed</h1><p>{_e(exc)}</p><p><a href="/">Back</a></p></div>'), 400)
@@ -432,6 +433,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
         chosen = set(row["reviewed_vulnerability_ids"] or
                      [match["vulnerability_id"] for match in matches])
         sighting_type = str(row["reviewed_sighting_type"] or extraction.get("proposed_type", "seen"))
+        history_rows = "".join(
+            f"<tr><td>{_e(event['created_at'])}</td><td>{_e(event['actor'] or 'unknown')}</td>"
+            f"<td class=\"{_e(event['review_state'])}\">{_e(event['review_state'])}</td>"
+            f"<td>{_e(', '.join(event['vulnerability_ids']) or '—')}</td>"
+            f"<td>{_e(event['sighting_type'] or '—')}</td><td>{_e(event['note'] or '—')}</td></tr>"
+            for event in self.server.store.review_events(source)
+        )
         match_cards = "".join(
             f'<option value="{_e(match["vulnerability_id"])}" {"selected" if match["vulnerability_id"] in chosen else ""}>'
             f'{_e(match["vulnerability_id"])} — {_e(match["title"])} ({_e(match["confidence"])})</option>'
@@ -458,7 +466,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <label>Sighting type</label><select name="sighting_type" style="width:100%">{self._options(SIGHTING_TYPES, sighting_type)}</select>
 <label>Review note</label><textarea name="note">{_e(row['review_note'])}</textarea>
 <div class="toolbar" style="margin-top:14px"><button name="action" value="approve">Approve</button><button class="danger" name="action" value="reject">Reject</button><button class="secondary" name="action" value="reset">Reset</button></div></form>
-{self._publish_form(row, source)}</div></aside></div>"""
+        {self._publish_form(row, source)}</div></aside></div>
+<div class="panel"><h2>Decision history</h2><p class="muted">Append-only audit trail; newest decision first.</p>
+<table><thead><tr><th>Time</th><th>Reviewer</th><th>Decision</th><th>Vulnerabilities</th><th>Sighting type</th><th>Note</th></tr></thead>
+<tbody>{history_rows or '<tr><td colspan="6">No review decisions yet.</td></tr>'}</tbody></table></div>"""
         self._send(_layout(str(row["title"]), content))
 
     def _archive_detail(self, source: str) -> None:
