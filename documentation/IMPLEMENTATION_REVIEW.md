@@ -175,6 +175,15 @@ die Abnahmetests.
 
 ## Konfliktarmer Umsetzungsplan
 
+### Begonnene Umsetzung
+
+Der erste vertikale Schnitt aus Phase 1 und Phase 4 ist umgesetzt: Ein
+validiertes `ListQuery` kapselt Filter, Sortierung, Richtung und Seitengröße. Die
+Review-Queue verwendet DB-seitiges Counting und Pagination, stabile Sortierung
+mit Allowlist sowie sortierbare Spalten für Titel, Confidence und Review-Status.
+Die bestehenden Store-Methoden bleiben vorerst kompatibel, damit die weiteren
+Collections einzeln und ohne Big-Bang-Umstellung migriert werden können.
+
 Die Arbeit wird entlang stabiler Schnittstellen geschnitten. Jede Phase beginnt
 mit Vertragstests und endet mit einer Migration/Abnahme. Parallele Änderungen an
 `store.py`, `public_ui.py` und `review_ui.py` werden vermieden; diese Dateien sind
