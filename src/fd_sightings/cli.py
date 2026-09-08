@@ -4,15 +4,15 @@ import argparse
 import json
 import os
 import sys
-from calendar import month_abbr
 from datetime import date
 from pathlib import Path
 
-from .http import Client, HTTPError
-from .parsers import parse_month, parse_rss
+from .http import Client
+from .parsers import parse_rss
 from .pipeline import Result, process_urls
 from .store import Store
 from .vulnerability_lookup import VulnerabilityLookup
+from .sources import SOURCES, SourceAdapter, adapters
 
 
 DEFAULT_ARCHIVE = "https://seclists.org/fulldisclosure"
@@ -23,7 +23,7 @@ DEFAULT_VL = "https://vulnerability.circl.lu"
 def period(value: str) -> tuple[int, int]:
     try:
         year, month = (int(part) for part in value.split("-", 1))
-        if year < 2002 or not 1 <= month <= 12:
+        if year < 1993 or not 1 <= month <= 12:
             raise ValueError
         return year, month
     except ValueError as exc:
@@ -50,15 +50,18 @@ def make_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     rss = sub.add_parser("rss", help="Process the current RSS feed")
+    rss.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     rss.add_argument("--feed", default=DEFAULT_RSS)
     rss.add_argument("--limit", type=int, default=0)
 
     sync = sub.add_parser("sync", help="Import the current RSS feed and automatically publish eligible records")
+    sync.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     sync.add_argument("--feed", default=DEFAULT_RSS)
     sync.add_argument("--limit", type=int, default=0)
     sync.add_argument("--retry-failed", action="store_true")
 
     archive = sub.add_parser("archive", help="Process one or more archive months")
+    archive.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     archive.add_argument("--from-period", type=period, required=True)
     archive.add_argument("--to-period", type=period)
     archive.add_argument("--archive-url", default=DEFAULT_ARCHIVE)
@@ -90,6 +93,11 @@ def make_parser() -> argparse.ArgumentParser:
 
     publication_export = sub.add_parser("export-publications", help="Export the automatic publication ledger as JSON Lines")
     publication_export.add_argument("--output", default="-")
+    evaluate = sub.add_parser("evaluate", help="Evaluate deterministic matching against labelled JSON fixtures")
+    evaluate.add_argument("fixtures", nargs="+", help="Fixture JSON files or directories")
+    evaluate.add_argument("--min-precision", type=float, default=0.98)
+    evaluate.add_argument("--min-recall", type=float, default=0.80)
+    evaluate.add_argument("--output", default="-", help="Write the JSON report to this path")
     return parser
 
 
@@ -132,7 +140,8 @@ def _summary(results: list[Result], vulnerability_lookup_url: str = "") -> dict[
     }
 
 
-def _process(args: argparse.Namespace, urls: list[str], store: Store, source_client: Client, lookup: VulnerabilityLookup) -> None:
+def _process(args: argparse.Namespace, urls: list[str], store: Store, source_client: Client,
+             lookup: VulnerabilityLookup, adapter: SourceAdapter | None = None) -> list[Result]:
     if getattr(args, "limit", 0):
         urls = urls[: args.limit]
     results = process_urls(
@@ -143,12 +152,26 @@ def _process(args: argparse.Namespace, urls: list[str], store: Store, source_cli
         semantic=not args.no_semantic,
         refresh=args.refresh,
         progress=_progress,
+        adapter=adapter,
     )
-    print(json.dumps(_summary(results, args.vl_url), indent=2))
+    return results
 
 
 def main(argv: list[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
+    if args.command == "evaluate":
+        from .evaluation import evaluate_cases, load_cases
+        from .llm import PROMPT_VERSION
+        report = evaluate_cases(
+            load_cases(args.fixtures), min_precision=args.min_precision, min_recall=args.min_recall,
+        ).as_dict()
+        report["prompt_version"] = PROMPT_VERSION
+        encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+        if args.output == "-":
+            sys.stdout.write(encoded)
+        else:
+            Path(args.output).write_text(encoded, encoding="utf-8")
+        return 0 if report["passed"] else 2
     store = Store(args.db)
     try:
         if args.command == "policy":
@@ -200,20 +223,36 @@ def main(argv: list[str] | None = None) -> int:
 
         source_client, lookup = _clients(args)
         if args.command == "rss":
-            _process(args, parse_rss(source_client.get_text(args.feed)), store, source_client, lookup)
+            aggregate = []
+            selected = adapters(args.sources)
+            if args.feed != DEFAULT_RSS and len(selected) != 1:
+                raise ValueError("--feed can only override one source")
+            for adapter in selected:
+                if args.feed == DEFAULT_RSS and not adapter.has_current_feed:
+                    print(
+                        f"source {adapter.source_id} has no current RSS feed; "
+                        "use the archive command for historical import",
+                        file=sys.stderr,
+                    )
+                urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
+                        else parse_rss(source_client.get_text(args.feed)))
+                aggregate.extend(_process(args, urls, store, source_client, lookup, adapter))
+            print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         elif args.command == "sync":
-            urls = parse_rss(source_client.get_text(args.feed))
-            if args.limit:
-                urls = urls[: args.limit]
-            results = process_urls(
-                urls,
-                source_client=source_client,
-                lookup=lookup,
-                store=store,
-                semantic=not args.no_semantic,
-                refresh=args.refresh,
-                progress=_progress,
-            )
+            results = []
+            selected = adapters(args.sources)
+            if args.feed != DEFAULT_RSS and len(selected) != 1:
+                raise ValueError("--feed can only override one source")
+            for adapter in selected:
+                if args.feed == DEFAULT_RSS and not adapter.has_current_feed:
+                    print(
+                        f"source {adapter.source_id} has no current RSS feed; "
+                        "use the archive command for historical import",
+                        file=sys.stderr,
+                    )
+                urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
+                        else parse_rss(source_client.get_text(args.feed)))
+                results.extend(_process(args, urls, store, source_client, lookup, adapter))
             from .policy import PublicationPolicy
             from .publication import execute_automatic_publication
             publications = execute_automatic_publication(
@@ -224,29 +263,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({"import": _summary(results, args.vl_url), "publications": publications}, indent=2))
         elif args.command == "url":
-            _process(args, [args.url], store, source_client, lookup)
+            results = _process(args, [args.url], store, source_client, lookup)
+            print(json.dumps(_summary(results, args.vl_url), indent=2))
         elif args.command == "archive":
             end = args.to_period or args.from_period
             aggregate: list[Result] = []
-            for year, month in periods(args.from_period, end):
-                month_url = f"{args.archive_url.rstrip('/')}/{year}/{month_abbr[month]}/date.html"
-                try:
-                    urls = parse_month(source_client.get_text(month_url), month_url)
-                except HTTPError as exc:
-                    if exc.status == 404:
-                        continue
-                    raise
-                if args.limit:
-                    urls = urls[: args.limit]
-                aggregate.extend(process_urls(
-                    urls,
-                    source_client=source_client,
-                    lookup=lookup,
-                    store=store,
-                    semantic=not args.no_semantic,
-                    refresh=args.refresh,
-                    progress=_progress,
-                ))
+            selected = adapters(args.sources)
+            if args.archive_url != DEFAULT_ARCHIVE and len(selected) != 1:
+                raise ValueError("--archive-url can only override one source")
+            for adapter in selected:
+                if args.archive_url != DEFAULT_ARCHIVE:
+                    from dataclasses import replace
+                    adapter = replace(adapter, archive_url=args.archive_url)
+                for year, month in periods(args.from_period, end):
+                    aggregate.extend(_process(
+                        args, adapter.month(source_client, year, month), store,
+                        source_client, lookup, adapter,
+                    ))
             print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         return 0
     finally:

@@ -1,10 +1,10 @@
 # VULNARCHIVE GNA 1988 publication policy
 
-Version: 1
+Version: 2
 
 ## Scope
 
-VULNARCHIVE archives public vulnerability-related mailing-list posts and publishes machine-readable observations and records derived from them. Full Disclosure is the first supported source.
+VULNARCHIVE archives public vulnerability-related mailing-list posts and publishes machine-readable observations and records derived from them. Full Disclosure and Bugtraq are the currently registered sources; additional sources require a reviewed adapter and provenance-preserving tests.
 
 VULNARCHIVE may issue `GCVE-1988-<publication-year>-<serial>` records for:
 
@@ -17,7 +17,7 @@ Routine mentions of an existing identifier may be represented only as Sightings.
 
 A publication is an assertion made by GNA 1988. It does not mean that VULNARCHIVE, GCVE, CIRCL, the affected vendor, or any third party has validated or endorsed the underlying report. Consumers decide independently whether to trust the GNA, the original source, or an individual assertion.
 
-Automated publication is permitted. The deterministic evidence score controls whether enough material is present to produce a useful record; it is not a confidence, correctness, or severity score.
+Automated publication is permitted. The deterministic evidence score controls whether enough material is present to produce a useful record; it is not a confidence, correctness, or severity score. Automatic LLM-assisted matching additionally requires a passing, prompt-version-compatible evaluation report. LLM output is never primary source evidence.
 
 ## Identifier year
 
@@ -43,6 +43,10 @@ The collector stores the retrieved source representation, source URL, format, pu
 
 Minimum body length, evidence thresholds, inferred-match confidence and margin, product requirements, context-record creation, Sighting creation, maximum description length, and automatic year-range creation are deployment configuration. The active values are exposed by the `fd-sightings policy` command and the local publication dashboard.
 
-## Removal
+## Review and accountability
 
-VULNARCHIVE may remove a record or Sighting when operationally necessary. This policy does not define a dispute-resolution workflow.
+Ambiguous matches and policy failures remain available for named-user review. Review and analysis decisions are retained as append-only events. A deployment may enable an optional four-eyes policy, in which case a distinct second reviewer is required before the projected decision becomes approved.
+
+## Removal and correction
+
+VULNARCHIVE may remove or correct a record or Sighting when operationally necessary, while preserving the decision and publication trail. This policy does not yet define a complete dispute-resolution workflow.
