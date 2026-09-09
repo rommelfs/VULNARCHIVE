@@ -97,6 +97,10 @@ def make_parser() -> argparse.ArgumentParser:
 
     publication_export = sub.add_parser("export-publications", help="Export the automatic publication ledger as JSON Lines")
     publication_export.add_argument("--output", default="-")
+    enrich_cpe = sub.add_parser(
+        "enrich-cpe", help="Backfill missing vendors in stored observations from the GCVE CPE registry",
+    )
+    enrich_cpe.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
     evaluate = sub.add_parser("evaluate", help="Evaluate deterministic matching against labelled JSON fixtures")
     evaluate.add_argument("fixtures", nargs="+", help="Fixture JSON files or directories")
     evaluate.add_argument("--min-precision", type=float, default=0.98)
@@ -196,6 +200,11 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(output)
             else:
                 Path(args.output).write_text(output, encoding="utf-8")
+            return 0
+
+        if args.command == "enrich-cpe":
+            registry = CPERegistry(Client(args.user_agent, timeout=8, min_interval=0.2), args.cpe_url)
+            print(json.dumps(registry.enrich_store(store, limit=args.limit), indent=2))
             return 0
 
         if args.command in {"plan-auto", "publish-auto"}:

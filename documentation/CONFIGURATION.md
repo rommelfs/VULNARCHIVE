@@ -17,6 +17,17 @@ load `.env` files. Start with [`config/vulnarchive.env.example`](../config/vulna
 The CLI flags `--db`, `--vl-url`, `--cpe-url`, `--user-agent`, `--no-semantic`, and
 `--refresh` override applicable defaults.
 
+CPE lookup runs automatically during every new or refreshed import after product
+extraction and before matching. To apply it later to all stored observations that
+have a product but no vendor, run:
+
+```bash
+fd-sightings enrich-cpe
+```
+
+Use `--limit N` for a bounded pilot. The command updates only the stored
+extraction; it does not rewrite GCVE records that have already been published.
+
 ## Sources
 
 | Variable | Example | Purpose |

@@ -1,8 +1,12 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 from fd_sightings.cpe import CPERegistry
 from fd_sightings.http import HTTPError
 from fd_sightings.models import Extraction
+from fd_sightings.models import Message
+from fd_sightings.store import Store
 
 
 class CPERegistryTests(unittest.TestCase):
@@ -66,6 +70,31 @@ class CPERegistryTests(unittest.TestCase):
         missing = Extraction(product_hint="Widget")
         self.assertIs(CPERegistry(Client()).enrich(missing), missing)
         self.assertEqual(missing.vendor_hint, "")
+
+    def test_mass_enrichment_updates_only_missing_vendors(self):
+        class Client:
+            def get_json(self, url, params=None):
+                product = params["q"]
+                return {"items": [{
+                    "uuid": f"{product}-uuid", "vendor_uuid": "vendor-uuid",
+                    "name": product, "vendor_name": "canonical_vendor",
+                }]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "cpe.sqlite")
+            try:
+                store.save(Message("missing", "Missing"), Extraction(product_hint="widget"), [])
+                store.save(
+                    Message("known", "Known"),
+                    Extraction(product_hint="gadget", vendor_hint="Existing Vendor"), [],
+                )
+                result = CPERegistry(Client()).enrich_store(store)
+
+                self.assertEqual(result, {"candidates": 1, "enriched": 1, "unchanged": 0})
+                self.assertEqual(store.get("missing")["extraction"]["vendor_hint"], "canonical_vendor")
+                self.assertEqual(store.get("known")["extraction"]["vendor_hint"], "Existing Vendor")
+            finally:
+                store.close()
 
 
 if __name__ == "__main__":

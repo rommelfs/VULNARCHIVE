@@ -711,6 +711,31 @@ class Store:
         query += " ORDER BY published DESC, source_url DESC"
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
 
+    def cpe_enrichment_candidates(self, limit: int = 0) -> list[dict[str, object]]:
+        """Return stored observations that have a product but no known vendor."""
+        self.db.row_factory = sqlite3.Row
+        query = """SELECT * FROM observations
+            WHERE COALESCE(json_extract(extraction_json, '$.product_hint'), '') <> ''
+              AND COALESCE(json_extract(extraction_json, '$.vendor_hint'), '') = ''
+            ORDER BY published DESC, source_url DESC"""
+        params: tuple[int, ...] = ()
+        if limit > 0:
+            query += " LIMIT ?"
+            params = (limit,)
+        return [self._decode(row) for row in self.db.execute(query, params)]
+
+    def update_extraction(self, source_url: str, extraction: Extraction) -> None:
+        """Persist enrichment without re-fetching or re-parsing source evidence."""
+        cursor = self.db.execute(
+            """UPDATE observations SET extraction_json=?, updated_at=CURRENT_TIMESTAMP
+            WHERE source_url=?""",
+            (json.dumps(extraction.as_dict()), source_url),
+        )
+        if cursor.rowcount != 1:
+            self.db.rollback()
+            raise ValueError(f"unknown observation: {source_url}")
+        self.db.commit()
+
     def observation_page(self, request: ListQuery) -> ListPage:
         """Return one stable, SQL-paginated observation collection."""
         tokens = re.findall(r"[^\W_]+", request.search, re.UNICODE)[:12]

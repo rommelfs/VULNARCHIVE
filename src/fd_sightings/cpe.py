@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, fields
+from typing import TYPE_CHECKING
 
 from .http import Client, HTTPError
 from .models import Extraction
+
+if TYPE_CHECKING:
+    from .store import Store
 
 
 def _identity(value: object) -> str:
@@ -58,3 +61,22 @@ class CPERegistry:
         extraction.cpe_product_uuid = str(match.get("uuid") or "")
         extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
         return extraction
+
+    def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:
+        """Backfill all eligible stored observations and return run counters."""
+        candidates = store.cpe_enrichment_candidates(limit)
+        allowed = {item.name for item in fields(Extraction)}
+        enriched = 0
+        for row in candidates:
+            raw = row.get("extraction")
+            values = raw if isinstance(raw, dict) else {}
+            extraction = Extraction(**{key: value for key, value in values.items() if key in allowed})
+            self.enrich(extraction)
+            if extraction.vendor_hint:
+                store.update_extraction(str(row["source_url"]), extraction)
+                enriched += 1
+        return {
+            "candidates": len(candidates),
+            "enriched": enriched,
+            "unchanged": len(candidates) - enriched,
+        }
