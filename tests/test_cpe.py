@@ -1,0 +1,72 @@
+import unittest
+
+from fd_sightings.cpe import CPERegistry
+from fd_sightings.http import HTTPError
+from fd_sightings.models import Extraction
+
+
+class CPERegistryTests(unittest.TestCase):
+    def test_exact_product_match_adds_canonical_product_and_vendor(self):
+        class Client:
+            def get_json(self, url, params=None):
+                self.request = (url, params)
+                return {"items": [{
+                    "uuid": "product-uuid",
+                    "vendor_uuid": "vendor-uuid",
+                    "name": "widget_server",
+                    "title": "Widget Server",
+                    "vendor_name": "example_corp",
+                    "vendor_title": "Example Corp",
+                }]}
+
+        client = Client()
+        extraction = CPERegistry(client, "https://cpe.example").enrich(
+            Extraction(product_hint="widget-server", relevant=True)
+        )
+
+        self.assertEqual(extraction.product_hint, "Widget Server")
+        self.assertEqual(extraction.vendor_hint, "Example Corp")
+        self.assertEqual(extraction.cpe_product_uuid, "product-uuid")
+        self.assertEqual(extraction.cpe_vendor_uuid, "vendor-uuid")
+        self.assertEqual(client.request, (
+            "https://cpe.example/api/products/suggest",
+            {"q": "widget-server", "limit": "20"},
+        ))
+
+    def test_prefix_only_or_ambiguous_matches_do_not_guess(self):
+        class Client:
+            def get_json(self, url, params=None):
+                return {"items": [
+                    {"uuid": "one", "vendor_uuid": "v1", "name": "widget_server",
+                     "vendor_name": "first"},
+                    {"uuid": "two", "vendor_uuid": "v2", "name": "widget",
+                     "vendor_name": "second"},
+                ]}
+
+        extraction = Extraction(product_hint="Widget")
+        CPERegistry(Client()).enrich(extraction)
+        self.assertEqual(extraction.vendor_hint, "second")
+
+        extraction = Extraction(product_hint="Widget Server")
+        duplicate = Client()
+        duplicate.get_json = lambda url, params=None: {"items": [
+            {"uuid": "one", "vendor_uuid": "v1", "name": "widget_server", "vendor_name": "first"},
+            {"uuid": "two", "vendor_uuid": "v2", "title": "Widget Server", "vendor_name": "second"},
+        ]}
+        CPERegistry(duplicate).enrich(extraction)
+        self.assertEqual(extraction.vendor_hint, "")
+
+    def test_existing_vendor_and_service_errors_leave_extraction_unchanged(self):
+        class Client:
+            def get_json(self, url, params=None):
+                raise HTTPError(503, "Unavailable")
+
+        known = Extraction(product_hint="Widget", vendor_hint="Known Vendor")
+        self.assertIs(CPERegistry(Client()).enrich(known), known)
+        missing = Extraction(product_hint="Widget")
+        self.assertIs(CPERegistry(Client()).enrich(missing), missing)
+        self.assertEqual(missing.vendor_hint, "")
+
+
+if __name__ == "__main__":
+    unittest.main()
