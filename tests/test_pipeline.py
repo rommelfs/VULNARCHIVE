@@ -40,6 +40,42 @@ marker_exists=yes
 
 
 class ParserTests(unittest.TestCase):
+    def test_refresh_propagates_new_vendor_to_published_record(self):
+        class SourceClient:
+            def get_text(self, url, *, retries=3):
+                return MESSAGE_HTML
+
+        class Lookup:
+            last_analysis = {"result": []}
+
+            def match(self, message, extraction, semantic=True):
+                extraction.vendor_hint = "Flextype Project"
+                return []
+
+        class RecordingStore:
+            def __init__(self):
+                self.vendor_updates = []
+
+            def seen(self, url):
+                return True
+
+            def save(self, message, extraction, matches, **kwargs):
+                self.analysis_trigger = kwargs["analysis_trigger"]
+
+            def update_published_vendor(self, source_url, vendor):
+                self.vendor_updates.append((source_url, vendor))
+                return 1
+
+        source = "https://example.test/advisory"
+        store = RecordingStore()
+        result = process_urls(
+            [source], source_client=SourceClient(), lookup=Lookup(), store=store,
+            refresh=True,
+        )
+        self.assertFalse(result[0].skipped)
+        self.assertEqual(store.analysis_trigger, "reprocess")
+        self.assertEqual(store.vendor_updates, [(source, "Flextype Project")])
+
     def test_import_continues_after_a_stalled_or_missing_message(self):
         class SourceClient:
             def __init__(self):
