@@ -273,6 +273,27 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(extraction.vendor_hint, "Acme Corp")
 
+    def test_cve_title_uses_affected_product_instead_of_identifier(self):
+        class LookupClient:
+            def get_json(self, url, params=None):
+                return {
+                    "cveMetadata": {"vulnId": "CVE-2026-52307"},
+                    "containers": {"cna": {
+                        "title": "Example issue",
+                        "affected": [{"vendor": "Acme", "product": "Mail Gateway"}],
+                    }},
+                }
+
+        message = Message(
+            "https://example.test/advisory", "CVE-2026-52307: SQL injection",
+            body="Details for CVE-2026-52307",
+        )
+        extraction = extract(message)
+        self.assertEqual(extraction.product_hint, "")
+        VulnerabilityLookup(LookupClient(), "https://vuln.example").match(message, extraction)
+        self.assertEqual(extraction.vendor_hint, "Acme")
+        self.assertEqual(extraction.product_hint, "Mail Gateway")
+
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"
         message = parse_message(

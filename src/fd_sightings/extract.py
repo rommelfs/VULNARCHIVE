@@ -20,6 +20,11 @@ VULN_TERMS = re.compile(
 
 VERSION_TOKEN = re.compile(r"^(?:v?\d+(?:\.\d+)+(?:[-._a-z0-9]*)?|through$|before$|after$|<=|>=)$", re.IGNORECASE)
 PREFIX = re.compile(r"^(?:re:\s*|fwd?:\s*|\[[^]]+\]\s*)+", re.IGNORECASE)
+IDENTIFIER_ONLY_RE = re.compile(
+    r"^(?:CVE-\d{4}-\d{4,}|GCVE-\d+-\d{4}-\d{4,}|"
+    r"GHSA-[23456789cfghjmpqrvwx]{4}(?:-[23456789cfghjmpqrvwx]{4}){2})$",
+    re.IGNORECASE,
+)
 VERSION_CONTEXT_RE = re.compile(
     r"\b(?:versions?|v)\s*(?:before|through|up to|<=|<|affected:?)?\s*"
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)",
@@ -65,6 +70,12 @@ def _unique(pattern: re.Pattern[str], text: str) -> list[str]:
 def product_hint(title: str) -> str:
     cleaned = PREFIX.sub("", title).strip()
     tokens = cleaned.split()
+    if tokens and IDENTIFIER_ONLY_RE.match(tokens[0].strip("()[],:;")):
+        # An identifier-only title prefix says nothing about the product.  A
+        # resolved explicit record can provide an unambiguous affected product
+        # later; treating the identifier as a product creates records such as
+        # vendor=CVE, product=CVE-2026-....
+        return ""
     selected: list[str] = []
     stopwords = {"authenticated", "unauthenticated", "remote", "local", "multiple", "stored"}
     for token in tokens[:8]:
@@ -87,6 +98,8 @@ def extract(message: Message) -> Extraction:
     for name, value in FIELD_RE.findall(text):
         fields.setdefault(name.casefold(), []).append(value.strip()[:200])
     explicit_product = (fields.get("product") or [""])[0]
+    if IDENTIFIER_ONLY_RE.match(explicit_product):
+        explicit_product = ""
     aliases = fields.get("alias", []) + fields.get("aliases", [])
     constraints = [
         {"operator": match.group(1).casefold(), "version": match.group(2)}

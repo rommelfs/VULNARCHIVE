@@ -20,6 +20,10 @@ def _words(value: object) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
 
 
+def _identifier_namespace(value: object) -> bool:
+    return bool(re.fullmatch(r"(?:cve|gcve|ghsa)(?:[-_ ].*)?", str(value or ""), re.IGNORECASE))
+
+
 @dataclass(slots=True)
 class CPERegistry:
     """Resolve extracted product names against the GCVE CPE OpenAPI service."""
@@ -35,7 +39,8 @@ class CPERegistry:
         normalized name/title match and a unique product/vendor identity.
         Registry availability must never prevent preservation of a message.
         """
-        if extraction.vendor_hint or not extraction.product_hint or not self.base_url:
+        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
+                or _identifier_namespace(extraction.product_hint)):
             return extraction
         try:
             payload = self.client.get_json(
@@ -61,8 +66,11 @@ class CPERegistry:
             return extraction
         if matches:
             match = matches[0]
+            vendor = str(match.get("vendor_title") or match["vendor_name"])
+            if _identifier_namespace(vendor):
+                return extraction
             extraction.product_hint = str(match.get("title") or match.get("name"))
-            extraction.vendor_hint = str(match.get("vendor_title") or match["vendor_name"])
+            extraction.vendor_hint = vendor
             extraction.cpe_product_uuid = str(match.get("uuid") or "")
             extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
             return extraction
@@ -100,7 +108,10 @@ class CPERegistry:
         if len(identities) != 1:
             return extraction
         match = matches[0]
-        extraction.vendor_hint = str(match.get("title") or match.get("name"))
+        vendor = str(match.get("title") or match.get("name"))
+        if _identifier_namespace(vendor):
+            return extraction
+        extraction.vendor_hint = vendor
         extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
         return extraction
 
