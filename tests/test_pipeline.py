@@ -9,7 +9,7 @@ from fd_sightings.models import Extraction, Match, Message
 from fd_sightings.store import Store
 from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
-from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
+from fd_sightings.publication import build_gcve_record, build_sighting_payload, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
 from fd_sightings.cli import _summary, make_parser
 from fd_sightings.public_api import publication_response
 from fd_sightings.http import HTTPError
@@ -167,7 +167,75 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(result.product_hint, "Flextype")
         self.assertEqual(result.vulnerability_types, ["code-execution"])
         self.assertEqual(result.proposed_type, "published-proof-of-concept")
+        self.assertEqual(result.poc_links, ["https://example.test/poc"])
         self.assertTrue(result.relevant)
+
+    def test_explicit_poc_wording_alone_proposes_poc_sighting(self):
+        result = extract(Message(
+            "https://example.test/advisory", "Widget issue",
+            body="Proof of Concept for this vulnerability",
+            links=["https://github.com/acme/widget-poc"],
+        ))
+        self.assertEqual(result.proposed_type, "published-proof-of-concept")
+        self.assertEqual(result.poc_links, ["https://github.com/acme/widget-poc"])
+
+    def test_poc_sighting_uses_direct_poc_link_as_source(self):
+        payload = build_sighting_payload({
+            "source_url": "https://example.test/advisory",
+            "title": "Widget issue",
+            "extraction": {
+                "poc_evidence": ["explicit PoC wording"],
+                "poc_links": ["https://github.com/acme/widget-poc"],
+            },
+            "matches": [],
+        }, "CVE-2026-1234", "published-proof-of-concept")
+        self.assertEqual(payload["type"], "published-proof-of-concept")
+        self.assertEqual(payload["source"], "https://github.com/acme/widget-poc")
+
+    def test_body_only_poc_uses_email_as_sighting_source(self):
+        message = Message(
+            "https://example.test/advisory", "Widget authentication bypass",
+            body="POST /admin HTTP/1.1\nHost: vulnerable.example\n\nrole=admin",
+        )
+        extraction = extract(message)
+        self.assertEqual(extraction.proposed_type, "published-proof-of-concept")
+        self.assertEqual(extraction.poc_links, [])
+        self.assertIn("embedded HTTP request", extraction.poc_evidence)
+
+        payload = build_sighting_payload({
+            "source_url": message.source_url,
+            "title": message.title,
+            "extraction": extraction.as_dict(),
+            "matches": [],
+        }, "CVE-2026-1234", extraction.proposed_type)
+        self.assertEqual(payload["source"], message.source_url)
+        self.assertIn("embedded in the source publication", payload["content"])
+
+    def test_unlabelled_curl_poc_in_body_is_detected(self):
+        extraction = extract(Message(
+            "https://example.test/advisory", "Widget command injection",
+            body="Run against an affected host:\n$ curl https://target.example/run?cmd=id",
+        ))
+        self.assertEqual(extraction.proposed_type, "published-proof-of-concept")
+        self.assertIn("embedded executable example", extraction.poc_evidence)
+
+    def test_explicit_record_supplies_unambiguous_vendor(self):
+        class LookupClient:
+            def get_json(self, url, params=None):
+                return {
+                    "cveMetadata": {"vulnId": "CVE-2026-1234"},
+                    "containers": {"cna": {
+                        "title": "Widget issue",
+                        "affected": [{"vendor": "Acme Corp", "product": "Widget"}],
+                    }},
+                }
+
+        extraction = Extraction(cve_ids=["CVE-2026-1234"], product_hint="Widget")
+        matches = VulnerabilityLookup(LookupClient(), "https://vuln.example").match(
+            Message("https://example.test/advisory", "Widget issue"), extraction,
+        )
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(extraction.vendor_hint, "Acme Corp")
 
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"

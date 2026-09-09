@@ -34,6 +34,16 @@ FIXED_VERSION_RE = re.compile(
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)", re.IGNORECASE,
 )
 COMMIT_RE = re.compile(r"\b(?:commit|revision)\s+([0-9a-f]{7,40})\b", re.IGNORECASE)
+POC_LINK_RE = re.compile(
+    r"(?:(?:^|[/_.-])(?:poc|proof[-_ ]of[-_ ]concept|exploit)(?:$|[/_.-])|"
+    r"(?:github|gitlab)\.com/[^\s/]+/[^\s/]*(?:poc|exploit)|exploit-db\.com/exploits/)",
+    re.IGNORECASE,
+)
+EMBEDDED_POC_RE = re.compile(
+    r"(?m)^(?:\s{0,4}(?:\$|#)\s+)?(?:curl|wget)\s+(?:-[A-Za-z]+\s+)*https?://\S+|"
+    r"^#!\s*/usr/bin/(?:env\s+)?(?:python\d*|bash|sh|perl|ruby)\b",
+    re.IGNORECASE,
+)
 FIELD_RE = re.compile(r"(?im)^\s*(vendor|product|component|module|aliases?)\s*:\s*([^\r\n]+)")
 VULNERABILITY_TYPES = {
     "buffer-overflow": re.compile(r"\bbuffer overflow\b", re.IGNORECASE),
@@ -86,17 +96,24 @@ def extract(message: Message) -> Extraction:
     affected_versions = {
         match.group(1) for match in VERSION_CONTEXT_RE.finditer(text)
     } - fixed_versions
+    poc_links = sorted({link for link in message.links if POC_LINK_RE.search(link)})
 
     if re.search(r"\b(proof[- ]of[- ]concept|PoC)\b", text, re.IGNORECASE):
         evidence.append("explicit PoC wording")
-        score += 2
+        # BCP-12 defines publication of a PoC as its own sighting type.  An
+        # explicit label is sufficient evidence; the additional indicators
+        # below remain useful for less clearly labelled reports.
+        score += 3
     if re.search(r"(?:^|\n)(?:GET|POST|PUT|PATCH|DELETE)\s+/\S+\s+HTTP/", text):
-        evidence.append("HTTP request")
-        score += 2
+        evidence.append("embedded HTTP request")
+        score += 3
+    if EMBEDDED_POC_RE.search(message.body):
+        evidence.append("embedded executable example")
+        score += 3
     if re.search(r"\b(payload|exploit code|reproduction steps|steps to reproduce)\b", text, re.IGNORECASE):
         evidence.append("payload or reproduction steps")
         score += 1
-    if re.search(r"github\.com/[^\s]+/(?:exploit|poc|0day)", text, re.IGNORECASE):
+    if poc_links:
         evidence.append("public exploit repository")
         score += 1
     if re.search(r"(?:marker_exists=yes|arbitrary code execution|code execution (?:was|is) confirmed)", text, re.IGNORECASE):
@@ -120,5 +137,6 @@ def extract(message: Message) -> Extraction:
         vulnerability_types=sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(text)),
         poc_score=score,
         poc_evidence=evidence,
+        poc_links=poc_links,
         relevant=bool(VULN_TERMS.search(text)),
     )
