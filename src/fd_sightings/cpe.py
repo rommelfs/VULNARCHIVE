@@ -16,6 +16,10 @@ def _identity(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
 
 
+def _words(value: object) -> tuple[str, ...]:
+    return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+
 @dataclass(slots=True)
 class CPERegistry:
     """Resolve extracted product names against the GCVE CPE OpenAPI service."""
@@ -53,13 +57,51 @@ class CPERegistry:
             (str(item.get("uuid") or ""), str(item.get("vendor_uuid") or ""))
             for item in matches
         }
+        if len(identities) > 1:
+            return extraction
+        if matches:
+            match = matches[0]
+            extraction.product_hint = str(match.get("title") or match.get("name"))
+            extraction.vendor_hint = str(match.get("vendor_title") or match["vendor_name"])
+            extraction.cpe_product_uuid = str(match.get("uuid") or "")
+            extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
+            return extraction
+
+        # Product names in advisories commonly include a vendor prefix (for
+        # example, "Apple macOS"), while the CPE product token is only
+        # "macos".  In that case product suggestions cannot match the complete
+        # extracted phrase. Resolve the prefix through the vendor endpoint.
+        product_words = _words(extraction.product_hint)
+        if not product_words:
+            return extraction
+        try:
+            payload = self.client.get_json(
+                f"{self.base_url.rstrip('/')}/api/vendors/suggest",
+                {"q": product_words[0], "limit": "20"},
+            )
+        except (HTTPError, OSError, RuntimeError, ValueError):
+            return extraction
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        prefixes: list[tuple[int, dict[str, object]]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            lengths = [
+                len(words) for value in (item.get("name"), item.get("title"))
+                if (words := _words(value)) and product_words[:len(words)] == words
+            ]
+            if lengths:
+                prefixes.append((max(lengths), item))
+        if not prefixes:
+            return extraction
+        longest = max(length for length, _ in prefixes)
+        matches = [item for length, item in prefixes if length == longest]
+        identities = {str(item.get("uuid") or "") for item in matches}
         if len(identities) != 1:
             return extraction
         match = matches[0]
-        extraction.product_hint = str(match.get("title") or match.get("name"))
-        extraction.vendor_hint = str(match.get("vendor_title") or match["vendor_name"])
-        extraction.cpe_product_uuid = str(match.get("uuid") or "")
-        extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
+        extraction.vendor_hint = str(match.get("title") or match.get("name"))
+        extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
         return extraction
 
     def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:
@@ -67,6 +109,7 @@ class CPERegistry:
         candidates = store.cpe_enrichment_candidates(limit)
         allowed = {item.name for item in fields(Extraction)}
         enriched = 0
+        publications_updated = 0
         for row in candidates:
             raw = row.get("extraction")
             values = raw if isinstance(raw, dict) else {}
@@ -74,9 +117,13 @@ class CPERegistry:
             self.enrich(extraction)
             if extraction.vendor_hint:
                 store.update_extraction(str(row["source_url"]), extraction)
+                publications_updated += store.update_published_vendor(
+                    str(row["source_url"]), extraction.vendor_hint,
+                )
                 enriched += 1
         return {
             "candidates": len(candidates),
             "enriched": enriched,
             "unchanged": len(candidates) - enriched,
+            "publications_updated": publications_updated,
         }

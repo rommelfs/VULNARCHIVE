@@ -71,6 +71,27 @@ class CPERegistryTests(unittest.TestCase):
         self.assertIs(CPERegistry(Client()).enrich(missing), missing)
         self.assertEqual(missing.vendor_hint, "")
 
+    def test_vendor_prefix_is_used_when_combined_product_name_has_no_product_match(self):
+        class Client:
+            def get_json(self, url, params=None):
+                if url.endswith("/api/products/suggest"):
+                    return {"items": []}
+                self.vendor_request = (url, params)
+                return {"items": [{
+                    "uuid": "apple-uuid", "name": "apple", "title": "Apple",
+                }]}
+
+        client = Client()
+        extraction = CPERegistry(client).enrich(Extraction(product_hint="Apple macOS"))
+
+        self.assertEqual(extraction.vendor_hint, "Apple")
+        self.assertEqual(extraction.product_hint, "Apple macOS")
+        self.assertEqual(extraction.cpe_vendor_uuid, "apple-uuid")
+        self.assertEqual(extraction.cpe_product_uuid, "")
+        self.assertEqual(client.vendor_request, (
+            "https://cpe.gcve.eu/api/vendors/suggest", {"q": "apple", "limit": "20"},
+        ))
+
     def test_mass_enrichment_updates_only_missing_vendors(self):
         class Client:
             def get_json(self, url, params=None):
@@ -90,9 +111,47 @@ class CPERegistryTests(unittest.TestCase):
                 )
                 result = CPERegistry(Client()).enrich_store(store)
 
-                self.assertEqual(result, {"candidates": 1, "enriched": 1, "unchanged": 0})
+                self.assertEqual(result, {
+                    "candidates": 1, "enriched": 1, "unchanged": 0,
+                    "publications_updated": 0,
+                })
                 self.assertEqual(store.get("missing")["extraction"]["vendor_hint"], "canonical_vendor")
                 self.assertEqual(store.get("known")["extraction"]["vendor_hint"], "Existing Vendor")
+            finally:
+                store.close()
+
+    def test_mass_enrichment_corrects_an_already_published_unknown_vendor(self):
+        class Client:
+            def get_json(self, url, params=None):
+                if url.endswith("/api/products/suggest"):
+                    return {"items": []}
+                return {"items": [{"uuid": "apple-uuid", "name": "apple", "title": "Apple"}]}
+
+        record = {
+            "cveMetadata": {"vulnId": "GCVE-1988-2026-0291", "dateUpdated": "2026-01-01T00:00:00Z"},
+            "containers": {"cna": {
+                "providerMetadata": {"dateUpdated": "2026-01-01T00:00:00Z"},
+                "affected": [{"vendor": "unknown", "product": "Apple macOS"}],
+            }},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "published.sqlite")
+            try:
+                store.save(Message("apple", "Apple"), Extraction(product_hint="Apple macOS"), [])
+                store.save_publication(
+                    "apple", "gcve:advisory", "gcve", gcve_id="GCVE-1988-2026-0291",
+                    status="published", payload=record,
+                )
+
+                result = CPERegistry(Client()).enrich_store(store)
+
+                self.assertEqual(result["publications_updated"], 1)
+                published = store.gcve_record("GCVE-1988-2026-0291")
+                affected = published["containers"]["cna"]["affected"]
+                self.assertEqual(affected[0]["vendor"], "Apple")
+                self.assertNotEqual(
+                    published["cveMetadata"]["dateUpdated"], "2026-01-01T00:00:00Z",
+                )
             finally:
                 store.close()
 

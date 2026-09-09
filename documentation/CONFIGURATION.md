@@ -25,8 +25,9 @@ have a product but no vendor, run:
 fd-sightings enrich-cpe
 ```
 
-Use `--limit N` for a bounded pilot. The command updates only the stored
-extraction; it does not rewrite GCVE records that have already been published.
+Use `--limit N` for a bounded pilot. The command updates the stored extraction
+and publishes a vendor correction for related local GCVE records whose vendor
+is still `unknown`; existing non-placeholder vendors are never overwritten.
 
 ## Sources
 

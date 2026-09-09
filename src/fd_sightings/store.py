@@ -736,6 +736,45 @@ class Store:
             raise ValueError(f"unknown observation: {source_url}")
         self.db.commit()
 
+    def update_published_vendor(self, source_url: str, vendor: str) -> int:
+        """Publish a vendor correction for local GCVE records from an observation."""
+        keys = self.db.execute(
+            """SELECT publication_key FROM automatic_publications
+            WHERE source_url=? AND kind='gcve' AND status='published'""",
+            (source_url,),
+        ).fetchall()
+        updated = 0
+        for (publication_key,) in keys:
+            entry = self.publication(source_url, str(publication_key))
+            record = entry.get("payload") if entry else None
+            if not isinstance(record, dict):
+                continue
+            containers = record.get("containers")
+            cna = containers.get("cna") if isinstance(containers, dict) else None
+            affected = cna.get("affected") if isinstance(cna, dict) else None
+            if not isinstance(affected, list):
+                continue
+            changed = False
+            for product in affected:
+                if isinstance(product, dict) and str(product.get("vendor") or "").casefold() in {"", "unknown"}:
+                    product["vendor"] = vendor
+                    changed = True
+            if not changed:
+                continue
+            now = self._utc_now()
+            metadata = record.get("cveMetadata")
+            if isinstance(metadata, dict):
+                metadata["dateUpdated"] = now
+            provider = cna.get("providerMetadata") if isinstance(cna, dict) else None
+            if isinstance(provider, dict):
+                provider["dateUpdated"] = now
+            self.save_publication(
+                source_url, str(publication_key), "gcve",
+                gcve_id=str(entry.get("gcve_id") or ""), status="published", payload=record,
+            )
+            updated += 1
+        return updated
+
     def observation_page(self, request: ListQuery) -> ListPage:
         """Return one stable, SQL-paginated observation collection."""
         tokens = re.findall(r"[^\W_]+", request.search, re.UNICODE)[:12]
