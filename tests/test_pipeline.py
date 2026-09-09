@@ -373,15 +373,28 @@ Fixed in version 2.4.2 by commit abcdef123456.""",
         self.assertLess(matches[0].confidence, PublicationPolicy().min_inferred_match_confidence)
 
     def test_import_summary_reports_match_and_llm_diagnostics(self):
-        match = Match(
+        first = Match(
             "CVE-2026-1234", "llm-assisted", 0.91, "Widget",
-            ["llm-model:model-test", "llm-error:RuntimeError"], [],
+            ["llm-model:model-test"], [],
         )
-        result = Result(Message("source", "Widget"), Extraction(relevant=True), [match])
-        summary = _summary([result])
-        self.assertEqual(summary["match_methods"], {"llm-assisted": 1})
-        self.assertEqual(summary["llm_evaluated"], 1)
+        second = Match(
+            "CVE-2026-5678", "product-title-overlap", 0.75, "Widget",
+            ["llm-error:RuntimeError"], [],
+        )
+        results = [
+            Result(Message("source-1", "Widget"), Extraction(relevant=True), [first]),
+            Result(Message("source-2", "Widget"), Extraction(relevant=True), [second]),
+        ]
+        summary = _summary(results)
+        self.assertEqual(summary["matched"], 2)
+        self.assertEqual(summary["match_candidates"], 2)
+        self.assertEqual(summary["match_methods"], {
+            "llm-assisted": 1, "product-title-overlap": 1,
+        })
+        self.assertEqual(summary["llm_evaluated"], 2)
+        self.assertEqual(summary["llm_succeeded"], 1)
         self.assertEqual(summary["llm_errors"], 1)
+        self.assertEqual(summary["llm_error_types"], {"RuntimeError": 1})
 
     def test_review_workflow(self):
         with tempfile.TemporaryDirectory() as directory:
