@@ -9,7 +9,7 @@ from fd_sightings.models import Extraction, Match, Message
 from fd_sightings.store import Store
 from fd_sightings.vulnerability_lookup import VulnerabilityLookup
 from fd_sightings.policy import PublicationPolicy, plan_observation
-from fd_sightings.publication import build_gcve_record, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
+from fd_sightings.publication import build_gcve_record, build_sighting_payload, execute_automatic_publication, publication_year, public_archive_url, validate_gcve_record
 from fd_sightings.cli import _summary, make_parser
 from fd_sightings.public_api import publication_response
 from fd_sightings.http import HTTPError
@@ -40,6 +40,42 @@ marker_exists=yes
 
 
 class ParserTests(unittest.TestCase):
+    def test_refresh_propagates_new_vendor_to_published_record(self):
+        class SourceClient:
+            def get_text(self, url, *, retries=3):
+                return MESSAGE_HTML
+
+        class Lookup:
+            last_analysis = {"result": []}
+
+            def match(self, message, extraction, semantic=True):
+                extraction.vendor_hint = "Flextype Project"
+                return []
+
+        class RecordingStore:
+            def __init__(self):
+                self.vendor_updates = []
+
+            def seen(self, url):
+                return True
+
+            def save(self, message, extraction, matches, **kwargs):
+                self.analysis_trigger = kwargs["analysis_trigger"]
+
+            def update_published_vendor(self, source_url, vendor):
+                self.vendor_updates.append((source_url, vendor))
+                return 1
+
+        source = "https://example.test/advisory"
+        store = RecordingStore()
+        result = process_urls(
+            [source], source_client=SourceClient(), lookup=Lookup(), store=store,
+            refresh=True,
+        )
+        self.assertFalse(result[0].skipped)
+        self.assertEqual(store.analysis_trigger, "reprocess")
+        self.assertEqual(store.vendor_updates, [(source, "Flextype Project")])
+
     def test_import_continues_after_a_stalled_or_missing_message(self):
         class SourceClient:
             def __init__(self):
@@ -167,7 +203,96 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(result.product_hint, "Flextype")
         self.assertEqual(result.vulnerability_types, ["code-execution"])
         self.assertEqual(result.proposed_type, "published-proof-of-concept")
+        self.assertEqual(result.poc_links, ["https://example.test/poc"])
         self.assertTrue(result.relevant)
+
+    def test_explicit_poc_wording_alone_proposes_poc_sighting(self):
+        result = extract(Message(
+            "https://example.test/advisory", "Widget issue",
+            body="Proof of Concept for this vulnerability",
+            links=["https://github.com/acme/widget-poc"],
+        ))
+        self.assertEqual(result.proposed_type, "published-proof-of-concept")
+        self.assertEqual(result.poc_links, ["https://github.com/acme/widget-poc"])
+
+    def test_poc_sighting_uses_direct_poc_link_as_source(self):
+        payload = build_sighting_payload({
+            "source_url": "https://example.test/advisory",
+            "title": "Widget issue",
+            "extraction": {
+                "poc_evidence": ["explicit PoC wording"],
+                "poc_links": ["https://github.com/acme/widget-poc"],
+            },
+            "matches": [],
+        }, "CVE-2026-1234", "published-proof-of-concept")
+        self.assertEqual(payload["type"], "published-proof-of-concept")
+        self.assertEqual(payload["source"], "https://github.com/acme/widget-poc")
+
+    def test_body_only_poc_uses_email_as_sighting_source(self):
+        message = Message(
+            "https://example.test/advisory", "Widget authentication bypass",
+            body="POST /admin HTTP/1.1\nHost: vulnerable.example\n\nrole=admin",
+        )
+        extraction = extract(message)
+        self.assertEqual(extraction.proposed_type, "published-proof-of-concept")
+        self.assertEqual(extraction.poc_links, [])
+        self.assertIn("embedded HTTP request", extraction.poc_evidence)
+
+        payload = build_sighting_payload({
+            "source_url": message.source_url,
+            "title": message.title,
+            "extraction": extraction.as_dict(),
+            "matches": [],
+        }, "CVE-2026-1234", extraction.proposed_type)
+        self.assertEqual(payload["source"], message.source_url)
+        self.assertIn("embedded in the source publication", payload["content"])
+
+    def test_unlabelled_curl_poc_in_body_is_detected(self):
+        extraction = extract(Message(
+            "https://example.test/advisory", "Widget command injection",
+            body="Run against an affected host:\n$ curl https://target.example/run?cmd=id",
+        ))
+        self.assertEqual(extraction.proposed_type, "published-proof-of-concept")
+        self.assertIn("embedded executable example", extraction.poc_evidence)
+
+    def test_explicit_record_supplies_unambiguous_vendor(self):
+        class LookupClient:
+            def get_json(self, url, params=None):
+                return {
+                    "cveMetadata": {"vulnId": "CVE-2026-1234"},
+                    "containers": {"cna": {
+                        "title": "Widget issue",
+                        "affected": [{"vendor": "Acme Corp", "product": "Widget"}],
+                    }},
+                }
+
+        extraction = Extraction(cve_ids=["CVE-2026-1234"], product_hint="Widget")
+        matches = VulnerabilityLookup(LookupClient(), "https://vuln.example").match(
+            Message("https://example.test/advisory", "Widget issue"), extraction,
+        )
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(extraction.vendor_hint, "Acme Corp")
+
+    def test_cve_title_uses_affected_product_instead_of_identifier(self):
+        class LookupClient:
+            def get_json(self, url, params=None):
+                return {
+                    "cveMetadata": {"vulnId": "CVE-2026-52307"},
+                    "containers": {"cna": {
+                        "title": "Example issue",
+                        "affected": [{"vendor": "Acme", "product": "Mail Gateway"}],
+                    }},
+                }
+
+        message = Message(
+            "https://example.test/advisory", "CVE-2026-52307: SQL injection",
+            body="Details for CVE-2026-52307",
+        )
+        extraction = extract(message)
+        self.assertEqual(extraction.product_hint, "")
+        VulnerabilityLookup(LookupClient(), "https://vuln.example").match(message, extraction)
+        self.assertEqual(extraction.vendor_hint, "Acme")
+        self.assertEqual(extraction.product_hint, "Mail Gateway")
 
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"
@@ -269,15 +394,28 @@ Fixed in version 2.4.2 by commit abcdef123456.""",
         self.assertLess(matches[0].confidence, PublicationPolicy().min_inferred_match_confidence)
 
     def test_import_summary_reports_match_and_llm_diagnostics(self):
-        match = Match(
+        first = Match(
             "CVE-2026-1234", "llm-assisted", 0.91, "Widget",
-            ["llm-model:model-test", "llm-error:RuntimeError"], [],
+            ["llm-model:model-test"], [],
         )
-        result = Result(Message("source", "Widget"), Extraction(relevant=True), [match])
-        summary = _summary([result])
-        self.assertEqual(summary["match_methods"], {"llm-assisted": 1})
-        self.assertEqual(summary["llm_evaluated"], 1)
+        second = Match(
+            "CVE-2026-5678", "product-title-overlap", 0.75, "Widget",
+            ["llm-error:RuntimeError"], [],
+        )
+        results = [
+            Result(Message("source-1", "Widget"), Extraction(relevant=True), [first]),
+            Result(Message("source-2", "Widget"), Extraction(relevant=True), [second]),
+        ]
+        summary = _summary(results)
+        self.assertEqual(summary["matched"], 2)
+        self.assertEqual(summary["match_candidates"], 2)
+        self.assertEqual(summary["match_methods"], {
+            "llm-assisted": 1, "product-title-overlap": 1,
+        })
+        self.assertEqual(summary["llm_evaluated"], 2)
+        self.assertEqual(summary["llm_succeeded"], 1)
         self.assertEqual(summary["llm_errors"], 1)
+        self.assertEqual(summary["llm_error_types"], {"RuntimeError": 1})
 
     def test_review_workflow(self):
         with tempfile.TemporaryDirectory() as directory:

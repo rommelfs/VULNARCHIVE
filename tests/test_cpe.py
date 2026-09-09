@@ -71,6 +71,15 @@ class CPERegistryTests(unittest.TestCase):
         self.assertIs(CPERegistry(Client()).enrich(missing), missing)
         self.assertEqual(missing.vendor_hint, "")
 
+    def test_identifier_is_never_looked_up_as_a_product(self):
+        class Client:
+            def get_json(self, url, params=None):
+                raise AssertionError("identifier must not be sent to CPE suggestions")
+
+        extraction = Extraction(product_hint="CVE-2026-52307")
+        CPERegistry(Client()).enrich(extraction)
+        self.assertEqual(extraction.vendor_hint, "")
+
     def test_vendor_prefix_is_used_when_combined_product_name_has_no_product_match(self):
         class Client:
             def get_json(self, url, params=None):
