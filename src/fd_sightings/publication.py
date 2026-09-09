@@ -99,7 +99,7 @@ def build_gcve_record(
         "title": str(row.get("title") or gcve_id),
         "descriptions": [{"lang": "en", "value": str(row.get("body") or row.get("title") or "")[:policy.max_description_chars]}],
         "affected": [{
-            "vendor": "unknown",
+            "vendor": str(extraction.get("vendor_hint") or "unknown"),
             "product": product,
             "versions": [{"version": "unknown", "status": "affected"}],
         }],

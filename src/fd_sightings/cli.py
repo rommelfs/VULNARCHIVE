@@ -7,6 +7,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from .cpe import CPERegistry
 from .http import Client
 from .parsers import parse_rss
 from .pipeline import Result, process_urls
@@ -18,6 +19,7 @@ from .sources import SOURCES, SourceAdapter, adapters
 DEFAULT_ARCHIVE = "https://seclists.org/fulldisclosure"
 DEFAULT_RSS = "https://seclists.org/rss/fulldisclosure.rss"
 DEFAULT_VL = "https://vulnerability.circl.lu"
+DEFAULT_CPE = "https://cpe.gcve.eu"
 
 
 def period(value: str) -> tuple[int, int]:
@@ -44,6 +46,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fd-sightings")
     parser.add_argument("--db", default=os.getenv("FD_SIGHTINGS_DB", "data/fd-sightings.sqlite"))
     parser.add_argument("--vl-url", default=os.getenv("VL_URL", DEFAULT_VL))
+    parser.add_argument("--cpe-url", default=os.getenv("CPE_URL", DEFAULT_CPE),
+                        help="GCVE CPE registry base URL; use an empty value to disable enrichment")
     parser.add_argument("--user-agent", default=os.getenv("FD_USER_AGENT", "VULNARCHIVE/0.2 (set FD_USER_AGENT with contact)"))
     parser.add_argument("--no-semantic", action="store_true", help="Only resolve identifiers explicitly present in a message")
     parser.add_argument("--refresh", action="store_true")
@@ -93,6 +97,10 @@ def make_parser() -> argparse.ArgumentParser:
 
     publication_export = sub.add_parser("export-publications", help="Export the automatic publication ledger as JSON Lines")
     publication_export.add_argument("--output", default="-")
+    enrich_cpe = sub.add_parser(
+        "enrich-cpe", help="Backfill missing vendors in stored observations from the GCVE CPE registry",
+    )
+    enrich_cpe.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
     evaluate = sub.add_parser("evaluate", help="Evaluate deterministic matching against labelled JSON fixtures")
     evaluate.add_argument("fixtures", nargs="+", help="Fixture JSON files or directories")
     evaluate.add_argument("--min-precision", type=float, default=0.98)
@@ -101,14 +109,17 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _clients(args: argparse.Namespace) -> tuple[Client, VulnerabilityLookup]:
+def _clients(args: argparse.Namespace) -> tuple[Client, VulnerabilityLookup, CPERegistry]:
     from .llm import LLMMatcher
     api_key = os.getenv("VL_API_KEY", "")
     source_client = Client(args.user_agent, timeout=15, min_interval=0.5)
     lookup_client = Client(args.user_agent, timeout=8, min_interval=1.6 if api_key else 3.1)
     llm_client = Client(args.user_agent, timeout=45, min_interval=0.0)
-    return source_client, VulnerabilityLookup(
-        lookup_client, args.vl_url, api_key, LLMMatcher.from_env(llm_client)
+    cpe_client = Client(args.user_agent, timeout=8, min_interval=0.2)
+    return (
+        source_client,
+        VulnerabilityLookup(lookup_client, args.vl_url, api_key, LLMMatcher.from_env(llm_client)),
+        CPERegistry(cpe_client, args.cpe_url),
     )
 
 
@@ -141,7 +152,8 @@ def _summary(results: list[Result], vulnerability_lookup_url: str = "") -> dict[
 
 
 def _process(args: argparse.Namespace, urls: list[str], store: Store, source_client: Client,
-             lookup: VulnerabilityLookup, adapter: SourceAdapter | None = None) -> list[Result]:
+             lookup: VulnerabilityLookup, adapter: SourceAdapter | None = None,
+             cpe_registry: CPERegistry | None = None) -> list[Result]:
     if getattr(args, "limit", 0):
         urls = urls[: args.limit]
     results = process_urls(
@@ -153,6 +165,7 @@ def _process(args: argparse.Namespace, urls: list[str], store: Store, source_cli
         refresh=args.refresh,
         progress=_progress,
         adapter=adapter,
+        cpe_registry=cpe_registry,
     )
     return results
 
@@ -189,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.output).write_text(output, encoding="utf-8")
             return 0
 
+        if args.command == "enrich-cpe":
+            registry = CPERegistry(Client(args.user_agent, timeout=8, min_interval=0.2), args.cpe_url)
+            print(json.dumps(registry.enrich_store(store, limit=args.limit), indent=2))
+            return 0
+
         if args.command in {"plan-auto", "publish-auto"}:
             from .policy import PublicationPolicy
             from .publication import execute_automatic_publication
@@ -221,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.output).write_text(output, encoding="utf-8")
             return 0
 
-        source_client, lookup = _clients(args)
+        source_client, lookup, cpe_registry = _clients(args)
         if args.command == "rss":
             aggregate = []
             selected = adapters(args.sources)
@@ -236,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
                         else parse_rss(source_client.get_text(args.feed)))
-                aggregate.extend(_process(args, urls, store, source_client, lookup, adapter))
+                aggregate.extend(_process(args, urls, store, source_client, lookup, adapter, cpe_registry))
             print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         elif args.command == "sync":
             results = []
@@ -252,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
                         else parse_rss(source_client.get_text(args.feed)))
-                results.extend(_process(args, urls, store, source_client, lookup, adapter))
+                results.extend(_process(args, urls, store, source_client, lookup, adapter, cpe_registry))
             from .policy import PublicationPolicy
             from .publication import execute_automatic_publication
             publications = execute_automatic_publication(
@@ -263,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({"import": _summary(results, args.vl_url), "publications": publications}, indent=2))
         elif args.command == "url":
-            results = _process(args, [args.url], store, source_client, lookup)
+            results = _process(args, [args.url], store, source_client, lookup, cpe_registry=cpe_registry)
             print(json.dumps(_summary(results, args.vl_url), indent=2))
         elif args.command == "archive":
             end = args.to_period or args.from_period
@@ -278,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
                 for year, month in periods(args.from_period, end):
                     aggregate.extend(_process(
                         args, adapter.month(source_client, year, month), store,
-                        source_client, lookup, adapter,
+                        source_client, lookup, adapter, cpe_registry,
                     ))
             print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         return 0
