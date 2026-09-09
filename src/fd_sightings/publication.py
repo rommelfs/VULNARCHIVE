@@ -62,10 +62,14 @@ def build_sighting_payload(row: dict[str, object], target: str, sighting_type: s
     )
     if match and match.get("method") != "explicit-id":
         content += f". Automated candidate match: {match.get('method')} (confidence {match.get('confidence')})"
+    poc_links = [str(link) for link in extraction.get("poc_links") or [] if str(link)]
+    source = poc_links[0] if sighting_type == "published-proof-of-concept" and poc_links else str(row["source_url"])
+    if sighting_type == "published-proof-of-concept" and not poc_links:
+        content += ". The proof of concept is embedded in the source publication"
     return {
         "vulnerability": target,
         "type": sighting_type,
-        "source": str(row["source_url"]),
+        "source": source,
         "content": content[:2000],
     }
 
