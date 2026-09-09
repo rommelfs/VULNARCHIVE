@@ -30,6 +30,8 @@ class Extraction:
     cvss_vectors: list[str] = field(default_factory=list)
     product_hint: str = ""
     vendor_hint: str = ""
+    cpe_product_uuid: str = ""
+    cpe_vendor_uuid: str = ""
     component_hint: str = ""
     product_aliases: list[str] = field(default_factory=list)
     affected_versions: list[str] = field(default_factory=list)

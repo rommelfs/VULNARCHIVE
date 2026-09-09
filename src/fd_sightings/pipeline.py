@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .extract import extract
+from .cpe import CPERegistry
 from .http import Client
 from .models import Extraction, Match, Message
 from .parsers import parse_message
@@ -31,6 +32,7 @@ def process_urls(
     refresh: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
     adapter: SourceAdapter | None = None,
+    cpe_registry: CPERegistry | None = None,
 ) -> list[Result]:
     results: list[Result] = []
     total = len(urls)
@@ -46,6 +48,8 @@ def process_urls(
             html = source_client.get_text(url, retries=1)
             message = adapter.parse(html, url) if adapter else parse_message(html, url)
             extraction = extract(message)
+            if cpe_registry:
+                extraction = cpe_registry.enrich(extraction)
             matches = lookup.match(message, extraction, semantic=semantic) if extraction.relevant else []
             analysis = getattr(
                 lookup, "last_analysis", {"result": [match.as_dict() for match in matches]},

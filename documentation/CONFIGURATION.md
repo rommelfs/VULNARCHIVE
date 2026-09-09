@@ -12,8 +12,9 @@ load `.env` files. Start with [`config/vulnarchive.env.example`](../config/vulna
 | `FD_USER_AGENT` | built-in identifier | Contact-bearing HTTP User-Agent; set in production |
 | `VL_URL` | `https://vulnerability.circl.lu` | Read-only Vulnerability-Lookup base URL |
 | `VL_API_KEY` | empty | Optional lookup API key |
+| `CPE_URL` | `https://cpe.gcve.eu` | GCVE CPE OpenAPI base URL for best-effort missing-vendor enrichment; empty disables it |
 
-The CLI flags `--db`, `--vl-url`, `--user-agent`, `--no-semantic`, and
+The CLI flags `--db`, `--vl-url`, `--cpe-url`, `--user-agent`, `--no-semantic`, and
 `--refresh` override applicable defaults.
 
 ## Sources
