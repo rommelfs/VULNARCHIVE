@@ -12,9 +12,22 @@ load `.env` files. Start with [`config/vulnarchive.env.example`](../config/vulna
 | `FD_USER_AGENT` | built-in identifier | Contact-bearing HTTP User-Agent; set in production |
 | `VL_URL` | `https://vulnerability.circl.lu` | Read-only Vulnerability-Lookup base URL |
 | `VL_API_KEY` | empty | Optional lookup API key |
+| `CPE_URL` | `https://cpe.gcve.eu` | GCVE CPE OpenAPI base URL for best-effort missing-vendor enrichment; empty disables it |
 
-The CLI flags `--db`, `--vl-url`, `--user-agent`, `--no-semantic`, and
+The CLI flags `--db`, `--vl-url`, `--cpe-url`, `--user-agent`, `--no-semantic`, and
 `--refresh` override applicable defaults.
+
+CPE lookup runs automatically during every new or refreshed import after product
+extraction and before matching. To apply it later to all stored observations that
+have a product but no vendor, run:
+
+```bash
+fd-sightings enrich-cpe
+```
+
+Use `--limit N` for a bounded pilot. The command updates the stored extraction
+and publishes a vendor correction for related local GCVE records whose vendor
+is still `unknown`; existing non-placeholder vendors are never overwritten.
 
 ## Sources
 
