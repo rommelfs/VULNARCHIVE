@@ -45,6 +45,8 @@ def process_urls(
         try:
             # One retry bounds a stalled archive item while allowing the rest of
             # the month to continue and be summarized.
+            previous = store.get(url) if refresh else None
+            previous_extraction = dict(previous.get("extraction") or {}) if previous else {}
             html = source_client.get_text(url, retries=1)
             message = adapter.parse(html, url) if adapter else parse_message(html, url)
             extraction = extract(message)
@@ -58,6 +60,15 @@ def process_urls(
                 message, extraction, matches, analysis=analysis,
                 analysis_trigger="reprocess" if refresh else "import",
             )
+            # A refreshed analysis can discover a vendor through either CPE
+            # enrichment or an explicitly referenced vulnerability record.
+            # Keep already published local records in sync as well as the
+            # observation used for future publication plans.
+            if refresh and extraction.vendor_hint:
+                store.update_published_affected(
+                    url, vendor=extraction.vendor_hint, product=extraction.product_hint,
+                    previous_product=str(previous_extraction.get("product_hint") or ""),
+                )
             results.append(Result(message, extraction, matches))
         except (OSError, RuntimeError, ValueError) as exc:
             results.append(Result(Message(url, ""), Extraction(), [], error=str(exc)))
