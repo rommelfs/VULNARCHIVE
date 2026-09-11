@@ -45,6 +45,8 @@ def process_urls(
         try:
             # One retry bounds a stalled archive item while allowing the rest of
             # the month to continue and be summarized.
+            previous = store.get(url) if refresh else None
+            previous_extraction = dict(previous.get("extraction") or {}) if previous else {}
             html = source_client.get_text(url, retries=1)
             message = adapter.parse(html, url) if adapter else parse_message(html, url)
             extraction = extract(message)
