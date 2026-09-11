@@ -12,26 +12,27 @@ load `.env` files. Start with [`config/vulnarchive.env.example`](../config/vulna
 | `FD_USER_AGENT` | built-in identifier | Contact-bearing HTTP User-Agent; set in production |
 | `VL_URL` | `https://vulnerability.circl.lu` | Read-only Vulnerability-Lookup base URL |
 | `VL_API_KEY` | empty | Optional lookup API key |
-| `CPE_URL` | `https://cpe.gcve.eu` | GCVE CPE OpenAPI base URL for best-effort missing-vendor enrichment; empty disables it |
+| `CPE_URL` | `https://cpe.gcve.eu` | GCVE CPE OpenAPI base URL for best-effort product/vendor validation; empty disables it |
 
 The CLI flags `--db`, `--vl-url`, `--cpe-url`, `--user-agent`, `--no-semantic`, and
 `--refresh` override applicable defaults.
 
 CPE lookup runs automatically during every new or refreshed import after product
-extraction and before matching. To apply it later to all stored observations that
-have a product but no vendor, run:
+extraction and before matching. Exact registry matches canonicalize both names,
+including correcting a publisher or finder mistakenly identified as the vendor.
+To validate all stored observations that have a product, run:
 
 ```bash
 fd-sightings enrich-cpe
 ```
 
 Use `--limit N` for a bounded pilot. The command updates the stored extraction
-and publishes a vendor correction for related local GCVE records whose vendor
-is still `unknown`; existing non-placeholder vendors are never overwritten.
+and publishes registry-validated product/vendor corrections to related local
+GCVE records. Ambiguous suggestions and registry failures leave data unchanged.
 
 ## Re-analyzing stored observations
 
-`enrich-cpe` only fills missing vendors; it does not run the extraction rules
+`enrich-cpe` validates extracted names; it does not run the extraction rules
 again. After changing vendor or PoC detection, re-import the applicable source
 range with the global `--refresh` option (global options must precede the
 subcommand):
