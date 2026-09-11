@@ -80,6 +80,13 @@ class CPERegistryTests(unittest.TestCase):
         CPERegistry(Client()).enrich(extraction)
         self.assertEqual(extraction.vendor_hint, "")
 
+    def test_product_helper_degrades_when_suggestion_service_fails(self):
+        class Client:
+            def get_json(self, url, params=None):
+                raise HTTPError(503, "Unavailable")
+
+        self.assertIsNone(CPERegistry(Client())._product("Widget"))
+
     def test_vendor_prefix_is_used_when_combined_product_name_has_no_product_match(self):
         class Client:
             def get_json(self, url, params=None):

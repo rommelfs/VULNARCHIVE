@@ -310,6 +310,10 @@ class ParserTests(unittest.TestCase):
             body="Product: APPLE-SA-08-18-2026-1 Safari\nA vulnerability was fixed.",
         ))
         self.assertEqual(extraction.product_hint, "Safari")
+        self.assertEqual(
+            product_hint("SEC Consult SA-20260414-0 - Kiuwan SAST issue"),
+            "Kiuwan SAST issue",
+        )
 
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"

@@ -26,7 +26,9 @@ IDENTIFIER_ONLY_RE = re.compile(
     re.IGNORECASE,
 )
 ADVISORY_PREFIX_RE = re.compile(
-    r"^(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}\s*(?::|-)?\s+",
+    r"^(?:(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}|"
+    r"(?:[A-Z][\w.&-]*(?:\s+[A-Z][\w.&-]*){0,3})\s+SA-\d{6,8}(?:-\d+)*)"
+    r"\s*(?::|-)?\s+",
     re.IGNORECASE,
 )
 VERSION_CONTEXT_RE = re.compile(

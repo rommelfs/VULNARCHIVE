@@ -740,9 +740,14 @@ class Store:
         return self.update_published_affected(source_url, vendor=vendor)
 
     def update_published_affected(
-        self, source_url: str, *, vendor: str = "", product: str = "",
+        self, source_url: str, *, previous_product: str = "", vendor: str = "", product: str = "",
     ) -> int:
-        """Correct placeholder or identifier-like affected metadata."""
+        """Correct placeholder or identifier-like affected metadata.
+
+        ``previous_product`` is optional so repair callers do not need a stale
+        extraction value merely to replace values that are invalid on their
+        face.  When supplied, it also permits correcting that exact old value.
+        """
         keys = self.db.execute(
             """SELECT publication_key FROM automatic_publications
             WHERE source_url=? AND kind='gcve' AND status='published'""",
@@ -772,6 +777,9 @@ class Store:
                         r"(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}\s+(?=\S)",
                         old_product, re.IGNORECASE,
                     )
+                )
+                invalid_product = invalid_product or bool(
+                    previous_product and old_product.casefold() == previous_product.casefold()
                 )
                 if vendor and invalid_vendor:
                     affected_product["vendor"] = vendor

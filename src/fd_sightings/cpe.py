@@ -34,17 +34,13 @@ class CPERegistry:
     client: Client
     base_url: str = "https://cpe.gcve.eu"
 
-    def enrich(self, extraction: Extraction) -> Extraction:
-        """Fill a missing vendor only when one unambiguous product is found.
+    def _suggest(self, kind: str, query: str) -> list[dict[str, object]]:
+        """Return suggestion dictionaries, degrading registry errors to no match.
 
-        The suggestion endpoint uses prefix matching, so accepting its first
-        result could silently assign a related product.  Require an exact
-        normalized name/title match and a unique product/vendor identity.
-        Registry availability must never prevent preservation of a message.
+        Keeping all endpoint access in this method also makes the helper-based
+        product/vendor resolver safe: `_product` must never depend on a method
+        that is only conditionally defined by a previous refactor.
         """
-        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
-                or _identifier_namespace(extraction.product_hint)):
-            return extraction
         try:
             payload = self.client.get_json(
                 f"{self.base_url.rstrip('/')}/api/{kind}/suggest",
@@ -62,14 +58,37 @@ class CPERegistry:
             item for item in items
             if wanted and wanted in {_identity(item.get("name")), _identity(item.get("title"))}
         ]
+
+    def _product(self, name: str, vendor: str = "") -> dict[str, object] | None:
+        """Resolve one exact and unambiguous product suggestion."""
+        matches = [item for item in self._exact(self._suggest("products", name), name)
+                   if item.get("vendor_name")]
+        if vendor:
+            wanted_vendor = _identity(vendor)
+            matches = [
+                item for item in matches
+                if wanted_vendor in {
+                    _identity(item.get("vendor_name")), _identity(item.get("vendor_title")),
+                }
+            ]
         identities = {
             (str(item.get("uuid") or ""), str(item.get("vendor_uuid") or ""))
             for item in matches
         }
-        if len(identities) > 1:
+        return matches[0] if matches and len(identities) == 1 else None
+
+    def enrich(self, extraction: Extraction) -> Extraction:
+        """Fill a missing vendor only when one unambiguous product is found.
+
+        The suggestion endpoint uses prefix matching, so accepting its first
+        result could silently assign a related product.  Require an exact
+        normalized name/title match and a unique product/vendor identity.
+        Registry availability must never prevent preservation of a message.
+        """
+        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
+                or _identifier_namespace(extraction.product_hint)):
             return extraction
-        if matches:
-            match = matches[0]
+        if match := self._product(extraction.product_hint):
             vendor = str(match.get("vendor_title") or match["vendor_name"])
             if _identifier_namespace(vendor):
                 return extraction
@@ -121,29 +140,10 @@ class CPERegistry:
         product = extraction.product_hint.strip()
         if not product or not self.base_url or _identifier_namespace(product):
             return extraction
-
-        if match := self._product(product, extraction.vendor_hint):
-            self._apply_product(extraction, match)
-            return extraction
-
-        # Some projects use the same CPE name for vendor and product. This is a
-        # safe way to replace `unknown` with the product name without guessing.
-        if extraction.vendor_hint.casefold() in PLACEHOLDERS:
-            if vendor_match := self._vendor(product):
-                vendor = str(vendor_match.get("title") or vendor_match.get("name") or "")
-                if vendor and not _identifier_namespace(vendor):
-                    extraction.vendor_hint = vendor
-                    extraction.cpe_vendor_uuid = str(vendor_match.get("uuid") or "")
-                    return extraction
-
-        # Resolve a leading vendor only if the remainder is also a registered
-        # product belonging to it. A prefix alone (for example an advisory
-        # publisher's name) is not product/vendor evidence.
-        words = _words(product)
-        for length in range(len(words) - 1, 0, -1):
-            prefix = " ".join(words[:length])
-            vendor_match = self._vendor(prefix)
-            if not vendor_match:
+        items = self._suggest("vendors", product_words[0])
+        prefixes: list[tuple[int, dict[str, object]]] = []
+        for item in items:
+            if not isinstance(item, dict):
                 continue
             remainder = " ".join(words[length:])
             candidates = self._exact(self._suggest("products", remainder), remainder)
