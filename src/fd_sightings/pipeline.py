@@ -63,7 +63,9 @@ def process_urls(
             # Keep already published local records in sync as well as the
             # observation used for future publication plans.
             if refresh and extraction.vendor_hint:
-                store.update_published_vendor(url, extraction.vendor_hint)
+                store.update_published_affected(
+                    url, vendor=extraction.vendor_hint, product=extraction.product_hint,
+                )
             results.append(Result(message, extraction, matches))
         except (OSError, RuntimeError, ValueError) as exc:
             results.append(Result(Message(url, ""), Extraction(), [], error=str(exc)))

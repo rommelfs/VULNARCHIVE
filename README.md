@@ -143,6 +143,9 @@ fd-sightings url https://seclists.org/fulldisclosure/2024/Jan/1
 # Re-run vendor, PoC, and vulnerability analysis for an existing URL
 fd-sightings --refresh url https://seclists.org/fulldisclosure/2024/Jan/1
 
+# Re-run analysis for every observation already stored
+fd-sightings rescan
+
 # Review/public servers
 fd-sightings review --bind 127.0.0.1 --port 8765
 fd-sightings public --bind 127.0.0.1 --port 8766

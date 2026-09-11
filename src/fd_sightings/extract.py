@@ -25,6 +25,10 @@ IDENTIFIER_ONLY_RE = re.compile(
     r"GHSA-[23456789cfghjmpqrvwx]{4}(?:-[23456789cfghjmpqrvwx]{4}){2})$",
     re.IGNORECASE,
 )
+ADVISORY_PREFIX_RE = re.compile(
+    r"^(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}\s*(?::|-)?\s+",
+    re.IGNORECASE,
+)
 VERSION_CONTEXT_RE = re.compile(
     r"\b(?:versions?|v)\s*(?:before|through|up to|<=|<|affected:?)?\s*"
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)",
@@ -69,13 +73,7 @@ def _unique(pattern: re.Pattern[str], text: str) -> list[str]:
 
 def product_hint(title: str) -> str:
     cleaned = PREFIX.sub("", title).strip()
-    # SEC Consult titles start with the advisory publisher, not the affected
-    # vendor/product ("SEC Consult SA-... :: ... in Kiuwan").
-    sec_consult = re.match(
-        r"^SEC\s+Consult\s+SA-\d{8}-\d+\s*::.*\bin\s+(.+)$", cleaned, re.IGNORECASE,
-    )
-    if sec_consult:
-        cleaned = sec_consult.group(1).strip()
+    cleaned = ADVISORY_PREFIX_RE.sub("", cleaned).strip()
     tokens = cleaned.split()
     if tokens and IDENTIFIER_ONLY_RE.match(tokens[0].strip("()[],:;")):
         # An identifier-only title prefix says nothing about the product.  A
@@ -105,6 +103,7 @@ def extract(message: Message) -> Extraction:
     for name, value in FIELD_RE.findall(text):
         fields.setdefault(name.casefold(), []).append(value.strip()[:200])
     explicit_product = (fields.get("product") or [""])[0]
+    explicit_product = ADVISORY_PREFIX_RE.sub("", explicit_product).strip()
     if IDENTIFIER_ONLY_RE.match(explicit_product):
         explicit_product = ""
     aliases = fields.get("alias", []) + fields.get("aliases", [])

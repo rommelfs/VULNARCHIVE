@@ -62,8 +62,8 @@ class ParserTests(unittest.TestCase):
             def save(self, message, extraction, matches, **kwargs):
                 self.analysis_trigger = kwargs["analysis_trigger"]
 
-            def update_published_vendor(self, source_url, vendor):
-                self.vendor_updates.append((source_url, vendor))
+            def update_published_affected(self, source_url, *, vendor, product):
+                self.vendor_updates.append((source_url, vendor, product))
                 return 1
 
         source = "https://example.test/advisory"
@@ -74,7 +74,13 @@ class ParserTests(unittest.TestCase):
         )
         self.assertFalse(result[0].skipped)
         self.assertEqual(store.analysis_trigger, "reprocess")
-        self.assertEqual(store.vendor_updates, [(source, "Flextype Project")])
+        self.assertEqual(store.vendor_updates, [(source, "Flextype Project", "Flextype")])
+
+    def test_rescan_command_selects_all_stored_observations(self):
+        args = make_parser().parse_args(["rescan"])
+        self.assertEqual(args.command, "rescan")
+        self.assertEqual(args.limit, 0)
+        self.assertIsNone(args.sources)
 
     def test_import_continues_after_a_stalled_or_missing_message(self):
         class SourceClient:
@@ -293,6 +299,17 @@ class ParserTests(unittest.TestCase):
         VulnerabilityLookup(LookupClient(), "https://vuln.example").match(message, extraction)
         self.assertEqual(extraction.vendor_hint, "Acme")
         self.assertEqual(extraction.product_hint, "Mail Gateway")
+
+    def test_vendor_advisory_id_is_removed_from_product(self):
+        self.assertEqual(
+            product_hint("APPLE-SA-08-18-2026-1 Safari"),
+            "Safari",
+        )
+        extraction = extract(Message(
+            "https://example.test/apple", "Security update",
+            body="Product: APPLE-SA-08-18-2026-1 Safari\nA vulnerability was fixed.",
+        ))
+        self.assertEqual(extraction.product_hint, "Safari")
 
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"

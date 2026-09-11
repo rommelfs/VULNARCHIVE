@@ -71,35 +71,6 @@ class CPERegistryTests(unittest.TestCase):
         self.assertIs(CPERegistry(Client()).enrich(missing), missing)
         self.assertEqual(missing.vendor_hint, "")
 
-    def test_exact_product_corrects_a_finder_mistaken_for_vendor(self):
-        class Client:
-            def get_json(self, url, params=None):
-                return {"items": [{
-                    "uuid": "kiuwan-product", "vendor_uuid": "kiuwan-vendor",
-                    "name": "kiuwan", "title": "Kiuwan",
-                    "vendor_name": "kiuwan", "vendor_title": "Kiuwan",
-                }]}
-
-        extraction = Extraction(product_hint="Kiuwan", vendor_hint="SEC Consult")
-        CPERegistry(Client()).enrich(extraction)
-
-        self.assertEqual(extraction.product_hint, "Kiuwan")
-        self.assertEqual(extraction.vendor_hint, "Kiuwan")
-        self.assertEqual(extraction.cpe_product_uuid, "kiuwan-product")
-
-    def test_product_name_is_used_as_vendor_only_after_exact_vendor_match(self):
-        class Client:
-            def get_json(self, url, params=None):
-                if url.endswith("/api/products/suggest"):
-                    return {"items": []}
-                return {"items": [{"uuid": "mongo-vendor", "name": "mongodb", "title": "MongoDB"}]}
-
-        extraction = Extraction(product_hint="MongoDB")
-        CPERegistry(Client()).enrich(extraction)
-
-        self.assertEqual(extraction.vendor_hint, "MongoDB")
-        self.assertEqual(extraction.cpe_vendor_uuid, "mongo-vendor")
-
     def test_identifier_is_never_looked_up_as_a_product(self):
         class Client:
             def get_json(self, url, params=None):
@@ -207,6 +178,58 @@ class CPERegistryTests(unittest.TestCase):
                 self.assertNotEqual(
                     published["cveMetadata"]["dateUpdated"], "2026-01-01T00:00:00Z",
                 )
+            finally:
+                store.close()
+
+    def test_refresh_correction_replaces_identifier_affected_values(self):
+        record = {
+            "cveMetadata": {"vulnId": "GCVE-1988-2026-0314"},
+            "containers": {"cna": {
+                "providerMetadata": {},
+                "affected": [{"vendor": "CVE", "product": "CVE-2026-52307"}],
+            }},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "correction.sqlite")
+            try:
+                store.save(Message("source", "CVE title"), Extraction(), [])
+                store.save_publication(
+                    "source", "gcve:advisory", "gcve", gcve_id="GCVE-1988-2026-0314",
+                    status="published", payload=record,
+                )
+                updated = store.update_published_affected(
+                    "source", vendor="Acme", product="Mail Gateway",
+                )
+                self.assertEqual(updated, 1)
+                affected = store.gcve_record("GCVE-1988-2026-0314")["containers"]["cna"]["affected"]
+                self.assertEqual(affected, [{"vendor": "Acme", "product": "Mail Gateway"}])
+            finally:
+                store.close()
+
+    def test_refresh_correction_replaces_advisory_id_product_prefix(self):
+        record = {
+            "cveMetadata": {"vulnId": "GCVE-1988-2026-0315"},
+            "containers": {"cna": {
+                "providerMetadata": {},
+                "affected": [{
+                    "vendor": "Apple", "product": "APPLE-SA-08-18-2026-1 Safari",
+                }],
+            }},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "advisory-prefix.sqlite")
+            try:
+                store.save(Message("source", "Apple advisory"), Extraction(), [])
+                store.save_publication(
+                    "source", "gcve:advisory", "gcve", gcve_id="GCVE-1988-2026-0315",
+                    status="published", payload=record,
+                )
+                updated = store.update_published_affected(
+                    "source", vendor="Apple", product="Safari",
+                )
+                self.assertEqual(updated, 1)
+                affected = store.gcve_record("GCVE-1988-2026-0315")["containers"]["cna"]["affected"]
+                self.assertEqual(affected, [{"vendor": "Apple", "product": "Safari"}])
             finally:
                 store.close()
 

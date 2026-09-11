@@ -34,7 +34,17 @@ class CPERegistry:
     client: Client
     base_url: str = "https://cpe.gcve.eu"
 
-    def _suggest(self, kind: str, query: str) -> list[dict[str, object]]:
+    def enrich(self, extraction: Extraction) -> Extraction:
+        """Fill a missing vendor only when one unambiguous product is found.
+
+        The suggestion endpoint uses prefix matching, so accepting its first
+        result could silently assign a related product.  Require an exact
+        normalized name/title match and a unique product/vendor identity.
+        Registry availability must never prevent preservation of a message.
+        """
+        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
+                or _identifier_namespace(extraction.product_hint)):
+            return extraction
         try:
             payload = self.client.get_json(
                 f"{self.base_url.rstrip('/')}/api/{kind}/suggest",
@@ -52,6 +62,22 @@ class CPERegistry:
             item for item in items
             if wanted and wanted in {_identity(item.get("name")), _identity(item.get("title"))}
         ]
+        identities = {
+            (str(item.get("uuid") or ""), str(item.get("vendor_uuid") or ""))
+            for item in matches
+        }
+        if len(identities) > 1:
+            return extraction
+        if matches:
+            match = matches[0]
+            vendor = str(match.get("vendor_title") or match["vendor_name"])
+            if _identifier_namespace(vendor):
+                return extraction
+            extraction.product_hint = str(match.get("title") or match.get("name"))
+            extraction.vendor_hint = vendor
+            extraction.cpe_product_uuid = str(match.get("uuid") or "")
+            extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
+            return extraction
 
     @staticmethod
     def _unique(items: list[dict[str, object]], *keys: str) -> dict[str, object] | None:
@@ -125,10 +151,21 @@ class CPERegistry:
                 item for item in candidates
                 if str(item.get("vendor_uuid") or "") == str(vendor_match.get("uuid") or "")
             ]
-            match = self._unique(candidates, "uuid", "vendor_uuid")
-            if match:
-                self._apply_product(extraction, match)
-                return extraction
+            if lengths:
+                prefixes.append((max(lengths), item))
+        if not prefixes:
+            return extraction
+        longest = max(length for length, _ in prefixes)
+        matches = [item for length, item in prefixes if length == longest]
+        identities = {str(item.get("uuid") or "") for item in matches}
+        if len(identities) != 1:
+            return extraction
+        match = matches[0]
+        vendor = str(match.get("title") or match.get("name"))
+        if _identifier_namespace(vendor):
+            return extraction
+        extraction.vendor_hint = vendor
+        extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
         return extraction
 
     def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:

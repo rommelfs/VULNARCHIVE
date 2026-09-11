@@ -74,6 +74,10 @@ def make_parser() -> argparse.ArgumentParser:
     one = sub.add_parser("url", help="Process one archive message")
     one.add_argument("url")
 
+    rescan = sub.add_parser("rescan", help="Re-analyze every stored observation")
+    rescan.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
+    rescan.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
+
     export = sub.add_parser("export", help="Export review data as JSON Lines")
     export.add_argument("--status", choices=["matched", "unmatched"])
     export.add_argument("--output", default="-")
@@ -302,6 +306,24 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "url":
             results = _process(args, [args.url], store, source_client, lookup, cpe_registry=cpe_registry)
             print(json.dumps(_summary(results, args.vl_url), indent=2))
+        elif args.command == "rescan":
+            rows = store.rows()
+            selected = set(args.sources or SOURCES)
+            rows = [row for row in rows if str(row.get("source_id") or "full-disclosure") in selected]
+            if args.limit:
+                rows = rows[:args.limit]
+            aggregate = []
+            for adapter in adapters(sorted(selected)):
+                urls = [
+                    str(row["source_url"]) for row in rows
+                    if str(row.get("source_id") or "full-disclosure") == adapter.source_id
+                ]
+                aggregate.extend(process_urls(
+                    urls, source_client=source_client, lookup=lookup, store=store,
+                    semantic=not args.no_semantic, refresh=True, progress=_progress,
+                    adapter=adapter, cpe_registry=cpe_registry,
+                ))
+            print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         elif args.command == "archive":
             end = args.to_period or args.from_period
             aggregate: list[Result] = []
