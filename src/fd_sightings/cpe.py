@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from .store import Store
 
 
+PLACEHOLDERS = {"", "unknown", "n/a"}
+
+
 def _identity(value: object) -> str:
     """Normalize display and CPE tokens for conservative identity comparison."""
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
@@ -26,7 +29,7 @@ def _identifier_namespace(value: object) -> bool:
 
 @dataclass(slots=True)
 class CPERegistry:
-    """Resolve extracted product names against the GCVE CPE OpenAPI service."""
+    """Validate extracted product/vendor names against the GCVE CPE registry."""
 
     client: Client
     base_url: str = "https://cpe.gcve.eu"
@@ -130,7 +133,7 @@ class CPERegistry:
         return extraction
 
     def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:
-        """Backfill all eligible stored observations and return run counters."""
+        """Validate eligible stored observations and return run counters."""
         candidates = store.cpe_enrichment_candidates(limit)
         allowed = {item.name for item in fields(Extraction)}
         enriched = 0
@@ -139,11 +142,20 @@ class CPERegistry:
             raw = row.get("extraction")
             values = raw if isinstance(raw, dict) else {}
             extraction = Extraction(**{key: value for key, value in values.items() if key in allowed})
+            before = (
+                extraction.product_hint, extraction.vendor_hint,
+                extraction.cpe_product_uuid, extraction.cpe_vendor_uuid,
+            )
             self.enrich(extraction)
-            if extraction.vendor_hint:
+            after = (
+                extraction.product_hint, extraction.vendor_hint,
+                extraction.cpe_product_uuid, extraction.cpe_vendor_uuid,
+            )
+            if after != before and (extraction.cpe_product_uuid or extraction.cpe_vendor_uuid):
                 store.update_extraction(str(row["source_url"]), extraction)
-                publications_updated += store.update_published_vendor(
-                    str(row["source_url"]), extraction.vendor_hint,
+                publications_updated += store.update_published_affected(
+                    str(row["source_url"]), extraction.vendor_hint, extraction.product_hint,
+                    previous_product=before[0],
                 )
                 enriched += 1
         return {

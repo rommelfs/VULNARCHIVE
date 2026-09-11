@@ -12,22 +12,157 @@ load `.env` files. Start with [`config/vulnarchive.env.example`](../config/vulna
 | `FD_USER_AGENT` | built-in identifier | Contact-bearing HTTP User-Agent; set in production |
 | `VL_URL` | `https://vulnerability.circl.lu` | Read-only Vulnerability-Lookup base URL |
 | `VL_API_KEY` | empty | Optional lookup API key |
-| `CPE_URL` | `https://cpe.gcve.eu` | GCVE CPE OpenAPI base URL for best-effort missing-vendor enrichment; empty disables it |
+| `CPE_URL` | `https://cpe.gcve.eu` | GCVE CPE OpenAPI base URL for best-effort product/vendor validation; empty disables it |
 
 The CLI flags `--db`, `--vl-url`, `--cpe-url`, `--user-agent`, `--no-semantic`, and
 `--refresh` override applicable defaults.
 
 CPE lookup runs automatically during every new or refreshed import after product
-extraction and before matching. To apply it later to all stored observations that
-have a product but no vendor, run:
+extraction and before matching. Exact registry matches canonicalize both names,
+including correcting a publisher or finder mistakenly identified as the vendor.
+To validate all stored observations that have a product, run:
 
 ```bash
 fd-sightings enrich-cpe
 ```
 
 Use `--limit N` for a bounded pilot. The command updates the stored extraction
-and publishes a vendor correction for related local GCVE records whose vendor
-is still `unknown`; existing non-placeholder vendors are never overwritten.
+and publishes registry-validated product/vendor corrections to related local
+GCVE records. Ambiguous suggestions and registry failures leave data unchanged.
+
+## Re-analyzing stored observations
+
+`enrich-cpe` validates extracted names; it does not run the extraction rules
+again. After changing vendor or PoC detection, re-import the applicable source
+range with the global `--refresh` option (global options must precede the
+subcommand):
+
+```bash
+# One observation
+fd-sightings --refresh url https://seclists.org/fulldisclosure/2024/Jan/1
+
+# A complete historical range
+fd-sightings --refresh archive --source full-disclosure \
+  --from-period 2024-01 --to-period 2024-12
+
+# Current feed entries
+fd-sightings --refresh rss --source full-disclosure
+```
+
+A refresh downloads the source again, reruns product/vendor and PoC extraction,
+reruns vulnerability matching, and records a `reprocess` analysis event. A newly
+found vendor also corrects related, locally published GCVE records where the
+vendor is still a placeholder. It does not overwrite analyst review decisions.
+
+Inspect the resulting publication changes before submitting them:
+
+```bash
+fd-sightings plan-auto
+fd-sightings publish-auto --retry-failed
+```
+
+If a refreshed observation is newly classified as
+`published-proof-of-concept`, publication creates that BCP-12 sighting even if
+a `seen` sighting for the same vulnerability was published previously; the two
+sighting types have separate idempotency keys.
+
+## Re-analyzing stored observations
+
+`enrich-cpe` only fills missing vendors; it does not run the extraction rules
+again. After changing vendor or PoC detection, re-import the applicable source
+range with the global `--refresh` option (global options must precede the
+subcommand):
+
+```bash
+# One observation
+fd-sightings --refresh url https://seclists.org/fulldisclosure/2024/Jan/1
+
+# A complete historical range
+fd-sightings --refresh archive --source full-disclosure \
+  --from-period 2024-01 --to-period 2024-12
+
+# Current feed entries
+fd-sightings --refresh rss --source full-disclosure
+```
+
+To re-analyze every observation already present in the database without
+specifying archive periods, run:
+
+```bash
+fd-sightings rescan
+```
+
+Use repeated `--source` options to restrict sources, or `--limit N` for a pilot.
+The rescan corrects locally published `affected` values when their old vendor or
+product is a placeholder or a vulnerability identifier. It never replaces an
+existing non-placeholder product or vendor. PoC sightings are still only
+submitted by the separate `plan-auto`/`publish-auto` step below.
+
+A refresh downloads the source again, reruns product/vendor and PoC extraction,
+reruns vulnerability matching, and records a `reprocess` analysis event. A newly
+found vendor also corrects related, locally published GCVE records where the
+vendor is still a placeholder. It does not overwrite analyst review decisions.
+
+Inspect the resulting publication changes before submitting them:
+
+```bash
+fd-sightings plan-auto
+fd-sightings publish-auto --retry-failed
+```
+
+If a refreshed observation is newly classified as
+`published-proof-of-concept`, publication creates that BCP-12 sighting even if
+a `seen` sighting for the same vulnerability was published previously; the two
+sighting types have separate idempotency keys.
+
+## Re-analyzing stored observations
+
+`enrich-cpe` only fills missing vendors; it does not run the extraction rules
+again. After changing vendor or PoC detection, re-import the applicable source
+range with the global `--refresh` option (global options must precede the
+subcommand):
+
+```bash
+# One observation
+fd-sightings --refresh url https://seclists.org/fulldisclosure/2024/Jan/1
+
+# A complete historical range
+fd-sightings --refresh archive --source full-disclosure \
+  --from-period 2024-01 --to-period 2024-12
+
+# Current feed entries
+fd-sightings --refresh rss --source full-disclosure
+```
+
+To re-analyze every observation already present in the database without
+specifying archive periods, run:
+
+```bash
+fd-sightings rescan
+```
+
+Use repeated `--source` options to restrict sources, or `--limit N` for a pilot.
+The rescan corrects locally published `affected` values when their old vendor or
+product is a placeholder or a vulnerability identifier. It never replaces an
+existing non-placeholder product or vendor. PoC sightings are still only
+submitted by the separate `plan-auto`/`publish-auto` step below.
+
+A refresh downloads the source again, reruns product/vendor and PoC extraction,
+reruns vulnerability matching, and records a `reprocess` analysis event. A newly
+found vendor also corrects related, locally published GCVE records where the
+vendor is still a placeholder. It does not overwrite analyst review decisions.
+
+Inspect the resulting publication changes before submitting them:
+
+```bash
+fd-sightings plan-auto
+fd-sightings publish-auto --retry-failed
+```
+
+If a refreshed observation is newly classified as
+`published-proof-of-concept`, publication creates that BCP-12 sighting even if
+a `seen` sighting for the same vulnerability was published previously; the two
+sighting types have separate idempotency keys.
 
 ## Re-analyzing stored observations
 
