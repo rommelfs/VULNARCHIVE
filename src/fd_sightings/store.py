@@ -802,6 +802,42 @@ class Store:
             updated += 1
         return updated
 
+    def update_published_affected(
+        self, source_url: str, vendor: str, product: str, *, previous_product: str,
+    ) -> int:
+        """Apply a registry-validated product identity to local publications."""
+        keys = self.db.execute(
+            """SELECT publication_key FROM automatic_publications
+            WHERE source_url=? AND kind='gcve' AND status='published'""", (source_url,),
+        ).fetchall()
+        updated = 0
+        for (publication_key,) in keys:
+            entry = self.publication(source_url, str(publication_key))
+            record = entry.get("payload") if entry else None
+            cna = (record.get("containers") or {}).get("cna") if isinstance(record, dict) else None
+            affected = cna.get("affected") if isinstance(cna, dict) else None
+            if not isinstance(affected, list):
+                continue
+            changed = False
+            for item in affected:
+                if (isinstance(item, dict)
+                        and self._normalize_filter(item.get("product"))
+                        == self._normalize_filter(previous_product)
+                        and (item.get("vendor") != vendor or item.get("product") != product)):
+                    item["vendor"], item["product"] = vendor, product
+                    changed = True
+            if not changed:
+                continue
+            now = self._utc_now()
+            record.get("cveMetadata", {})["dateUpdated"] = now
+            cna.get("providerMetadata", {})["dateUpdated"] = now
+            self.save_publication(
+                source_url, str(publication_key), "gcve", gcve_id=str(entry.get("gcve_id") or ""),
+                status="published", payload=record,
+            )
+            updated += 1
+        return updated
+
     def observation_page(self, request: ListQuery) -> ListPage:
         """Return one stable, SQL-paginated observation collection."""
         tokens = re.findall(r"[^\W_]+", request.search, re.UNICODE)[:12]
