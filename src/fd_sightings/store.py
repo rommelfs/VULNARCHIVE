@@ -738,18 +738,16 @@ class Store:
     def update_published_vendor(self, source_url: str, vendor: str) -> int:
         """Publish a vendor correction for local GCVE records from an observation."""
         return self.update_published_affected(
-            source_url, vendor=vendor, previous_product="",
+            source_url, vendor=vendor,
         )
 
     def update_published_affected(
         self, source_url: str, vendor: str = "", product: str = "",
-        previous_product: str = "",
     ) -> int:
         """Correct placeholder or identifier-like affected metadata.
 
-        ``previous_product`` identifies the stale extraction value being
-        replaced. Vendor-prefixed products may also be replaced by their
-        canonical suffix; unrelated affected products remain untouched.
+        Vendor-prefixed products may be replaced by their canonical suffix;
+        unrelated affected products remain untouched.
         """
         keys = self.db.execute(
             """SELECT publication_key FROM automatic_publications
@@ -782,9 +780,6 @@ class Store:
                     )
                 )
                 invalid_product = invalid_product or bool(
-                    previous_product
-                    and old_product.casefold() == previous_product.casefold()
-                ) or bool(
                     product and old_product.casefold().endswith(" " + product.casefold())
                 )
                 if vendor and invalid_vendor:

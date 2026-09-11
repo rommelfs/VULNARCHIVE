@@ -62,11 +62,8 @@ class ParserTests(unittest.TestCase):
             def save(self, message, extraction, matches, **kwargs):
                 self.analysis_trigger = kwargs["analysis_trigger"]
 
-            def get(self, source_url):
-                return {"extraction": {"product_hint": "Old Flextype"}}
-
-            def update_published_affected(self, source_url, *, previous_product, vendor, product):
-                self.vendor_updates.append((source_url, previous_product, vendor, product))
+            def update_published_affected(self, source_url, *, vendor, product):
+                self.vendor_updates.append((source_url, vendor, product))
                 return 1
 
         source = "https://example.test/advisory"
@@ -77,9 +74,7 @@ class ParserTests(unittest.TestCase):
         )
         self.assertFalse(result[0].skipped)
         self.assertEqual(store.analysis_trigger, "reprocess")
-        self.assertEqual(store.vendor_updates, [(
-            source, "Old Flextype", "Flextype Project", "Flextype",
-        )])
+        self.assertEqual(store.vendor_updates, [(source, "Flextype Project", "Flextype")])
 
     def test_rescan_command_selects_all_stored_observations(self):
         args = make_parser().parse_args(["rescan"])

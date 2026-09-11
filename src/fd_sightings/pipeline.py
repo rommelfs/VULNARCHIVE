@@ -67,7 +67,6 @@ def process_urls(
             if refresh and extraction.vendor_hint:
                 store.update_published_affected(
                     url, vendor=extraction.vendor_hint, product=extraction.product_hint,
-                    previous_product=str(previous_extraction.get("product_hint") or ""),
                 )
             results.append(Result(message, extraction, matches))
         except (OSError, RuntimeError, ValueError) as exc:

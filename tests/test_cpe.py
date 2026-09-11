@@ -240,8 +240,7 @@ class CPERegistryTests(unittest.TestCase):
                     status="published", payload=record,
                 )
                 updated = store.update_published_affected(
-                    "source", previous_product="APPLE-SA-08-18-2026-1 Safari",
-                    vendor="Apple", product="Safari",
+                    "source", vendor="Apple", product="Safari",
                 )
                 self.assertEqual(updated, 1)
                 affected = store.gcve_record("GCVE-1988-2026-0315")["containers"]["cna"]["affected"]
