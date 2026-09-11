@@ -77,6 +77,15 @@ VULNERABILITY_TYPES = {
     "use-after-free": re.compile(r"\buse-after-free\b", re.IGNORECASE),
 }
 
+# Mailing-list subjects and structured Product fields sometimes contain only
+# the document type.  Publishing that label as a CPE product creates entries
+# such as ``dovecot:security_advisory`` even though the only usable product
+# identity in the report is the vendor itself.
+GENERIC_PRODUCT_RE = re.compile(
+    r"^(?:(?:security|vulnerability|vendor)\s+)?(?:advisory|bulletin|notice)$",
+    re.IGNORECASE,
+)
+
 
 def _unique(pattern: re.Pattern[str], text: str) -> list[str]:
     return sorted({match.upper() for match in pattern.findall(text)})
@@ -125,6 +134,10 @@ def extract(message: Message) -> Extraction:
     explicit_product = ADVISORY_PREFIX_RE.sub("", explicit_product).strip()
     if IDENTIFIER_ONLY_RE.match(explicit_product):
         explicit_product = ""
+    vendor = (fields.get("vendor") or [""])[0]
+    extracted_product = explicit_product or product_hint(message.title)
+    if vendor and GENERIC_PRODUCT_RE.fullmatch(extracted_product):
+        extracted_product = vendor
     aliases = fields.get("alias", []) + fields.get("aliases", [])
     constraints = [
         {"operator": match.group(1).casefold(), "version": match.group(2)}
@@ -164,8 +177,8 @@ def extract(message: Message) -> Extraction:
         gcve_ids=_unique(GCVE_RE, text),
         cwe_ids=_unique(CWE_RE, text),
         cvss_vectors=sorted(set(CVSS_RE.findall(text))),
-        product_hint=explicit_product or product_hint(message.title),
-        vendor_hint=(fields.get("vendor") or [""])[0],
+        product_hint=extracted_product,
+        vendor_hint=vendor,
         component_hint=(fields.get("component") or fields.get("module") or [""])[0],
         product_aliases=sorted({item.strip() for value in aliases for item in re.split(r"[,;]", value) if item.strip()}),
         affected_versions=sorted(affected_versions),
