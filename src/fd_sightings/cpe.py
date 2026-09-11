@@ -117,7 +117,7 @@ class CPERegistry:
         if (not extraction.product_hint or not self.base_url
                 or _identifier_namespace(extraction.product_hint)):
             return extraction
-        if match := self._product(extraction.product_hint, extraction.vendor_hint):
+        if match := self._product(extraction.product_hint):
             vendor = str(match.get("vendor_title") or match["vendor_name"])
             if _identifier_namespace(vendor):
                 return extraction
@@ -140,8 +140,16 @@ class CPERegistry:
                 and _identity(extraction.vendor_hint) != _identity(vendor)):
             return extraction
         extraction.vendor_hint = vendor
-        extraction.product_hint = product
         extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
+        product_match = self._product(product, vendor)
+        if product_match:
+            extraction.product_hint = str(product_match.get("title") or product_match.get("name"))
+            extraction.cpe_product_uuid = str(product_match.get("uuid") or "")
+            extraction.cpe_vendor_uuid = str(
+                product_match.get("vendor_uuid") or extraction.cpe_vendor_uuid
+            )
+        else:
+            extraction.product_hint = product
         return extraction
 
     def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:
@@ -162,7 +170,6 @@ class CPERegistry:
                     publications_updated += store.update_published_affected(
                         str(row["source_url"]), vendor=extraction.vendor_hint,
                         product=extraction.product_hint,
-                        previous_product=str(before.get("product_hint") or ""),
                     )
                 enriched += 1
         return {

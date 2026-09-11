@@ -314,6 +314,10 @@ class ParserTests(unittest.TestCase):
             product_hint("SEC Consult SA-20260414-0 - Kiuwan - Improper Enforcement"),
             "Kiuwan",
         )
+        self.assertEqual(
+            product_hint("[SEC Consult SA-20260414-0 - Kiuwan] Improper Enforcement"),
+            "Kiuwan",
+        )
 
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"

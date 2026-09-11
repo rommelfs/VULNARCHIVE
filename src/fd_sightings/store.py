@@ -741,13 +741,11 @@ class Store:
 
     def update_published_affected(
         self, source_url: str, *, vendor: str, product: str = "",
-        previous_product: str | None = None,
     ) -> int:
         """Correct placeholder or identifier-like affected metadata.
 
-        ``previous_product`` is optional so repair callers do not need a stale
-        extraction value merely to replace values that are invalid on their
-        face.  When supplied, it also permits correcting that exact old value.
+        Vendor-prefixed products may be replaced by their canonical suffix;
+        unrelated, non-placeholder affected products remain untouched.
         """
         keys = self.db.execute(
             """SELECT publication_key FROM automatic_publications
@@ -780,8 +778,7 @@ class Store:
                     )
                 )
                 invalid_product = invalid_product or bool(
-                    previous_product is not None
-                    and old_product.casefold() == previous_product.casefold()
+                    product and old_product.casefold().endswith(" " + product.casefold())
                 )
                 if vendor and invalid_vendor:
                     affected_product["vendor"] = vendor

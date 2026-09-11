@@ -31,6 +31,10 @@ ADVISORY_PREFIX_RE = re.compile(
     r"\s*(?::|-)?\s+",
     re.IGNORECASE,
 )
+ADVISORY_BRACKET_PRODUCT_RE = re.compile(
+    r"^\[[^]]*\bSA-\d{6,8}(?:-\d+)*\s+-\s+(?P<product>[^]]+)\]",
+    re.IGNORECASE,
+)
 VERSION_CONTEXT_RE = re.compile(
     r"\b(?:versions?|v)\s*(?:before|through|up to|<=|<|affected:?)?\s*"
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)",
@@ -74,6 +78,9 @@ def _unique(pattern: re.Pattern[str], text: str) -> list[str]:
 
 
 def product_hint(title: str) -> str:
+    bracketed = ADVISORY_BRACKET_PRODUCT_RE.match(title.strip())
+    if bracketed:
+        return product_hint(bracketed.group("product"))
     cleaned = PREFIX.sub("", title).strip()
     cleaned = ADVISORY_PREFIX_RE.sub("", cleaned).strip()
     tokens = cleaned.split()

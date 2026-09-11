@@ -100,11 +100,11 @@ class CPERegistryTests(unittest.TestCase):
         class Client:
             def get_json(self, url, params=None):
                 if url.endswith("/api/products/suggest"):
-                    if params["q"] == "macos":
+                    if params["q"] == "macOS":
                         return {"items": [{
                             "uuid": "macos-uuid", "vendor_uuid": "apple-uuid",
-                            "name": "macos", "title": "macOS", "vendor_name": "apple",
-                            "vendor_title": "Apple",
+                            "name": "macos", "title": "macOS",
+                            "vendor_name": "apple", "vendor_title": "Apple",
                         }]}
                     return {"items": []}
                 self.vendor_request = (url, params)
@@ -143,7 +143,7 @@ class CPERegistryTests(unittest.TestCase):
                 result = CPERegistry(Client()).enrich_store(store)
 
                 self.assertEqual(result, {
-                    "candidates": 2, "enriched": 1, "unchanged": 1,
+                    "candidates": 2, "enriched": 2, "unchanged": 0,
                     "publications_updated": 0,
                 })
                 self.assertEqual(store.get("missing")["extraction"]["vendor_hint"], "canonical_vendor")
