@@ -43,6 +43,14 @@ class ListQueryTest(unittest.TestCase):
                 self.assertEqual([row["title"] for row in searched.items], ["Widget 2"])
                 ranged = store.observation_page(ListQuery(confidence_min=.45, confidence_max=.75))
                 self.assertEqual([row["title"] for row in ranged.items], ["Widget 3"])
+                source_filtered = store.observation_page(ListQuery(source_id="bugtraq"))
+                self.assertEqual(source_filtered.items, [])
+                store.db.execute(
+                    "UPDATE observations SET source_id='bugtraq' WHERE source_url=?",
+                    ("https://example.test/2",),
+                )
+                source_filtered = store.observation_page(ListQuery(source_id="bugtraq"))
+                self.assertEqual([row["title"] for row in source_filtered.items], ["Widget 2"])
             finally:
                 store.close()
 

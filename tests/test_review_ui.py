@@ -129,6 +129,11 @@ class ReviewUITest(unittest.TestCase):
         self.assertEqual(page.count('type="range"'), 2)
         self.assertIn('src="/review/review.js"', page)
         self.assertIn('data-range-output="confidence-min-value"', page)
+        self.assertIn('<select name="source_id" aria-label="Source">', page)
+        self.assertIn('value="full-disclosure"', page)
+        self.assertIn('value="bugtraq"', page)
+        self.assertIn('value="bugtraq-ai"', page)
+        self.assertIn('sort=published', page)
         with urllib.request.urlopen(self.request("/review.js")) as response:
             script = response.read().decode()
             self.assertEqual(response.headers.get_content_type(), "text/javascript")
@@ -143,6 +148,24 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("Approve selected", page)
         self.assertIn("Approve all shown (2)", page)
         self.assertEqual(page.count('type="checkbox" name="source"'), 2)
+
+        self.store.db.execute(
+            "UPDATE observations SET source_id='bugtraq' WHERE source_url='https://example.test/2'"
+        )
+        self.store.db.execute(
+            "UPDATE observations SET source_id='bugtraq-ai' WHERE source_url='https://example.test/3'"
+        )
+        self.store.db.commit()
+        with urllib.request.urlopen(self.request("/?source_id=bugtraq")) as response:
+            filtered = response.read().decode()
+        self.assertIn("Widget 2", filtered)
+        self.assertNotIn("Widget 1", filtered)
+        self.assertNotIn("Widget 3", filtered)
+        self.assertIn('value="bugtraq" selected', filtered)
+        with urllib.request.urlopen(self.request("/?sort=published&order=asc")) as response:
+            chronological = response.read().decode()
+        self.assertLess(chronological.index("Widget 1"), chronological.index("Widget 2"))
+        self.assertLess(chronological.index("Widget 2"), chronological.index("Widget 3"))
 
     def test_bulk_approval_updates_explicitly_selected_rows(self) -> None:
         from fd_sightings.models import Match
