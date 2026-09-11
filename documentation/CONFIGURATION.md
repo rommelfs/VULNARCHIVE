@@ -560,11 +560,17 @@ sighting types have separate idempotency keys.
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `VA_SOURCES` | `full-disclosure,bugtraq` | Unattended sources and historical-worker UI defaults |
+| `VA_SOURCES` | `full-disclosure,bugtraq,bugtraq-ai` | Unattended sources and historical-worker UI defaults |
 
-Available built-ins are `full-disclosure` and `bugtraq`. Bugtraq is archive-only.
+Available built-ins are `full-disclosure`, `bugtraq`, and `bugtraq-ai`. Both
+Bugtraq sources consume the current SecurityFocus HyperKitty feeds.
 Whitespace is tolerated around comma-separated values; unknown values are an
 error. A CLI command can override selection with repeated `--source` flags.
+
+Download failures are stored with their source, latest error, and attempt count.
+Use `fd-sightings retry-failed` to retry all of them, or add repeatable `--source`
+and `--limit` options to bound a recovery run. A successful download clears the
+corresponding failure automatically.
 
 ## GNA identity
 

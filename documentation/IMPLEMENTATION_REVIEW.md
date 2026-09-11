@@ -24,14 +24,16 @@ The core ingestion, provenance, matching, review, audit, and GNA 1988 publicatio
 ### Implemented
 
 - A source-adapter registry isolates source identity, feed/month discovery, and parsing.
-- Full Disclosure and Bugtraq are registered.
+- Full Disclosure, current SecurityFocus Bugtraq, and Bugtraq AI are registered.
 - Source selection is repeatable on the CLI and configurable through `VA_SOURCES`.
 - Source ID and canonical key are persisted; deduplication is source-aware.
 - Historical workers accept source selections and date ranges.
 
 ### Gap and completion work
 
-Bugtraq is archive-only, and enabling it does not backfill history. There is no web page showing source health, last successful import, coverage, or parser error rate.
+Both Bugtraq adapters have current HyperKitty feeds. Failed post downloads are
+persisted and can be retried, but there is no web page showing source health,
+last successful import, coverage, or parser error rate.
 
 1. Formalize adapter contract tests with feed/month/message fixtures.
 2. Add source status: capability, last run/success, counts, and latest message date.

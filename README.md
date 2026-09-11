@@ -20,8 +20,8 @@ is new, and a similarity score is not treated as a final identity decision.
 ## Project goals
 
 - Preserve primary mailing-list evidence with stable source attribution.
-- Support multiple independently selectable sources; Full Disclosure and
-  archive-only Bugtraq are built in.
+- Support multiple independently selectable sources; Full Disclosure and the
+  current SecurityFocus Bugtraq and Bugtraq AI lists are built in.
 - Enrich messages with structured vendor, product, component, version, commit,
   alias, reference, and vulnerability data.
 - Link evidence to existing CVEs when the identity is sufficiently clear.
@@ -37,7 +37,7 @@ Non-goals and trust boundaries are documented in
 
 | Area | Capability |
 |---|---|
-| Ingestion | Full Disclosure RSS/archive, Bugtraq archive, repeatable `--source`, historical workers |
+| Ingestion | Full Disclosure RSS/archive, SecurityFocus HyperKitty feeds, failed-download retry, historical workers |
 | Provenance | Source ID, canonical key, message ID, URL, content hash, raw message body |
 | Extraction | IDs, vendors, products, components, versions, fixes, commits, aliases, references |
 | Matching | Explicit-ID resolution, bounded candidate lookup, deterministic checks, optional LLM comparison |
@@ -146,6 +146,9 @@ fd-sightings --refresh url https://seclists.org/fulldisclosure/2024/Jan/1
 # Re-run analysis for every observation already stored
 fd-sightings rescan
 
+# Retry and clear successfully recovered download failures
+fd-sightings retry-failed
+
 # Review/public servers
 fd-sightings review --bind 127.0.0.1 --port 8765
 fd-sightings public --bind 127.0.0.1 --port 8766
@@ -172,12 +175,26 @@ All data commands accept `--db PATH`. The default is
 default selection in the historical-import UI:
 
 ```bash
-VA_SOURCES=full-disclosure,bugtraq
+VA_SOURCES=full-disclosure,bugtraq,bugtraq-ai
 ```
 
-Bugtraq has no current RSS adapter, so enabling it does not create current-feed
-traffic. Use an archive command or queue a date range under **Review -> Archive
-imports**. Unknown source names fail validation instead of being ignored.
+Both Bugtraq sources use their current SecurityFocus HyperKitty feeds. Failed
+post downloads are retained in the database and can be attempted again with
+`fd-sightings retry-failed` (optionally restricted by `--source` or `--limit`);
+a successful import removes its failure entry. Unknown source names fail
+validation instead of being ignored.
+
+Historical HyperKitty month pages contain thread links rather than post links.
+The adapter expands each thread and its replies into stable `/message/<hash>/`
+permalinks and explicitly ignores the `/message/new` compose action.
+
+Administrators can also inspect and retry these failures under **Review →
+Archive imports**. The public viewer exposes a paginated list of locally
+published records at `/vulnerability/`. Before assigning a new GNA 1988 ID, the
+publication pipeline compares cross-source Message-IDs, gateway-normalized
+content, and conservative word-shingle similarity. List prefixes, transport
+headers, subscription footers, and PGP signature blocks therefore do not cause
+a second local GCVE, while conflicting CVE IDs or products prevent a fuzzy merge.
 
 ## Matching and LLM safety
 
