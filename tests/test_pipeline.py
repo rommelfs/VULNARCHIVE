@@ -323,6 +323,10 @@ class ParserTests(unittest.TestCase):
 
     def test_product_hint(self):
         self.assertEqual(product_hint("[ADVISORY] Cisco Catalyst 8000V v1.2 RCE"), "Cisco Catalyst 8000V")
+        self.assertEqual(
+            product_hint("SEC Consult SA-20260414-0 :: Improper Enforcement of Login in Kiuwan"),
+            "Kiuwan",
+        )
 
     def test_structured_version_extraction(self):
         result = extract(Message(

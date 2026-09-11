@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from .store import Store
 
 
+PLACEHOLDERS = {"", "unknown", "n/a"}
+
+
 def _identity(value: object) -> str:
     """Normalize display and CPE tokens for conservative identity comparison."""
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
@@ -26,97 +29,110 @@ def _identifier_namespace(value: object) -> bool:
 
 @dataclass(slots=True)
 class CPERegistry:
-    """Resolve extracted product names against the GCVE CPE OpenAPI service."""
+    """Validate extracted product/vendor names against the GCVE CPE registry."""
 
     client: Client
     base_url: str = "https://cpe.gcve.eu"
 
-    def enrich(self, extraction: Extraction) -> Extraction:
-        """Fill a missing vendor only when one unambiguous product is found.
-
-        The suggestion endpoint uses prefix matching, so accepting its first
-        result could silently assign a related product.  Require an exact
-        normalized name/title match and a unique product/vendor identity.
-        Registry availability must never prevent preservation of a message.
-        """
-        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
-                or _identifier_namespace(extraction.product_hint)):
-            return extraction
+    def _suggest(self, kind: str, query: str) -> list[dict[str, object]]:
         try:
             payload = self.client.get_json(
-                f"{self.base_url.rstrip('/')}/api/products/suggest",
-                {"q": extraction.product_hint, "limit": "20"},
+                f"{self.base_url.rstrip('/')}/api/{kind}/suggest",
+                {"q": query, "limit": "20"},
             )
         except (HTTPError, OSError, RuntimeError, ValueError):
-            return extraction
+            return []
         items = payload.get("items", []) if isinstance(payload, dict) else []
-        wanted = _identity(extraction.product_hint)
-        matches = [
+        return [item for item in items if isinstance(item, dict)]
+
+    @staticmethod
+    def _exact(items: list[dict[str, object]], value: str) -> list[dict[str, object]]:
+        wanted = _identity(value)
+        return [
             item for item in items
-            if isinstance(item, dict)
-            and wanted
-            and wanted in {_identity(item.get("name")), _identity(item.get("title"))}
-            and item.get("vendor_name")
+            if wanted and wanted in {_identity(item.get("name")), _identity(item.get("title"))}
         ]
-        identities = {
-            (str(item.get("uuid") or ""), str(item.get("vendor_uuid") or ""))
-            for item in matches
-        }
-        if len(identities) > 1:
-            return extraction
-        if matches:
-            match = matches[0]
-            vendor = str(match.get("vendor_title") or match["vendor_name"])
-            if _identifier_namespace(vendor):
-                return extraction
-            extraction.product_hint = str(match.get("title") or match.get("name"))
-            extraction.vendor_hint = vendor
-            extraction.cpe_product_uuid = str(match.get("uuid") or "")
-            extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
+
+    @staticmethod
+    def _unique(items: list[dict[str, object]], *keys: str) -> dict[str, object] | None:
+        identities = {tuple(str(item.get(key) or "") for key in keys) for item in items}
+        return items[0] if items and len(identities) == 1 else None
+
+    def _product(self, name: str, vendor: str = "") -> dict[str, object] | None:
+        matches = self._exact(self._suggest("products", name), name)
+        if vendor and vendor.casefold() not in PLACEHOLDERS:
+            compatible = [
+                item for item in matches
+                if _identity(vendor) in {
+                    _identity(item.get("vendor_name")), _identity(item.get("vendor_title")),
+                }
+            ]
+            if compatible:
+                matches = compatible
+        matches = [item for item in matches if item.get("vendor_name")]
+        return self._unique(matches, "uuid", "vendor_uuid")
+
+    def _vendor(self, name: str) -> dict[str, object] | None:
+        return self._unique(self._exact(self._suggest("vendors", name), name), "uuid")
+
+    @staticmethod
+    def _apply_product(extraction: Extraction, match: dict[str, object]) -> None:
+        vendor = str(match.get("vendor_title") or match.get("vendor_name") or "")
+        if not vendor or _identifier_namespace(vendor):
+            return
+        extraction.product_hint = str(match.get("title") or match.get("name") or extraction.product_hint)
+        extraction.vendor_hint = vendor
+        extraction.cpe_product_uuid = str(match.get("uuid") or "")
+        extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
+
+    def enrich(self, extraction: Extraction) -> Extraction:
+        """Canonicalize a product/vendor only when the registry is unambiguous.
+
+        Existing values are checked too: this lets a product match correct an
+        advisory author mistakenly extracted as its vendor. Registry failures
+        or ambiguous prefix results leave the original evidence untouched.
+        """
+        product = extraction.product_hint.strip()
+        if not product or not self.base_url or _identifier_namespace(product):
             return extraction
 
-        # Product names in advisories commonly include a vendor prefix (for
-        # example, "Apple macOS"), while the CPE product token is only
-        # "macos".  In that case product suggestions cannot match the complete
-        # extracted phrase. Resolve the prefix through the vendor endpoint.
-        product_words = _words(extraction.product_hint)
-        if not product_words:
+        if match := self._product(product, extraction.vendor_hint):
+            self._apply_product(extraction, match)
             return extraction
-        try:
-            payload = self.client.get_json(
-                f"{self.base_url.rstrip('/')}/api/vendors/suggest",
-                {"q": product_words[0], "limit": "20"},
-            )
-        except (HTTPError, OSError, RuntimeError, ValueError):
-            return extraction
-        items = payload.get("items", []) if isinstance(payload, dict) else []
-        prefixes: list[tuple[int, dict[str, object]]] = []
-        for item in items:
-            if not isinstance(item, dict):
+
+        # Some projects use the same CPE name for vendor and product. This is a
+        # safe way to replace `unknown` with the product name without guessing.
+        if extraction.vendor_hint.casefold() in PLACEHOLDERS:
+            if vendor_match := self._vendor(product):
+                vendor = str(vendor_match.get("title") or vendor_match.get("name") or "")
+                if vendor and not _identifier_namespace(vendor):
+                    extraction.vendor_hint = vendor
+                    extraction.cpe_vendor_uuid = str(vendor_match.get("uuid") or "")
+                    return extraction
+
+        # Resolve a leading vendor only if the remainder is also a registered
+        # product belonging to it. A prefix alone (for example an advisory
+        # publisher's name) is not product/vendor evidence.
+        words = _words(product)
+        for length in range(len(words) - 1, 0, -1):
+            prefix = " ".join(words[:length])
+            vendor_match = self._vendor(prefix)
+            if not vendor_match:
                 continue
-            lengths = [
-                len(words) for value in (item.get("name"), item.get("title"))
-                if (words := _words(value)) and product_words[:len(words)] == words
+            remainder = " ".join(words[length:])
+            candidates = self._exact(self._suggest("products", remainder), remainder)
+            candidates = [
+                item for item in candidates
+                if str(item.get("vendor_uuid") or "") == str(vendor_match.get("uuid") or "")
             ]
-            if lengths:
-                prefixes.append((max(lengths), item))
-        if not prefixes:
-            return extraction
-        longest = max(length for length, _ in prefixes)
-        matches = [item for length, item in prefixes if length == longest]
-        identities = {str(item.get("uuid") or "") for item in matches}
-        if len(identities) != 1:
-            return extraction
-        match = matches[0]
-        vendor = str(match.get("title") or match.get("name"))
-        if _identifier_namespace(vendor):
-            return extraction
-        extraction.vendor_hint = vendor
-        extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
+            match = self._unique(candidates, "uuid", "vendor_uuid")
+            if match:
+                self._apply_product(extraction, match)
+                return extraction
         return extraction
 
     def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:
-        """Backfill all eligible stored observations and return run counters."""
+        """Validate eligible stored observations and return run counters."""
         candidates = store.cpe_enrichment_candidates(limit)
         allowed = {item.name for item in fields(Extraction)}
         enriched = 0
@@ -125,11 +141,20 @@ class CPERegistry:
             raw = row.get("extraction")
             values = raw if isinstance(raw, dict) else {}
             extraction = Extraction(**{key: value for key, value in values.items() if key in allowed})
+            before = (
+                extraction.product_hint, extraction.vendor_hint,
+                extraction.cpe_product_uuid, extraction.cpe_vendor_uuid,
+            )
             self.enrich(extraction)
-            if extraction.vendor_hint:
+            after = (
+                extraction.product_hint, extraction.vendor_hint,
+                extraction.cpe_product_uuid, extraction.cpe_vendor_uuid,
+            )
+            if after != before and (extraction.cpe_product_uuid or extraction.cpe_vendor_uuid):
                 store.update_extraction(str(row["source_url"]), extraction)
-                publications_updated += store.update_published_vendor(
-                    str(row["source_url"]), extraction.vendor_hint,
+                publications_updated += store.update_published_affected(
+                    str(row["source_url"]), extraction.vendor_hint, extraction.product_hint,
+                    previous_product=before[0],
                 )
                 enriched += 1
         return {
