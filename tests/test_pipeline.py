@@ -677,6 +677,44 @@ Fixed in version 2.4.2 by commit abcdef123456.""",
             finally:
                 store.close()
 
+    def test_cross_source_duplicate_reuses_existing_gcve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "deduplicate.sqlite")
+            try:
+                first = parse_message(MESSAGE_HTML, "https://seclists.org/fulldisclosure/2026/Sep/27")
+                first.source_id = "full-disclosure"
+                second = parse_message(MESSAGE_HTML, "https://lists.securityfocus.com/hyperkitty/list/bugtraq@securityfocus.com/message/copy/")
+                second.source_id = "bugtraq"
+                first.message_id = "first@list.test"
+                second.message_id = "gateway-copy@list.test"
+                second.title = "[Bugtraq] Fwd: " + second.title
+                second.body += """
+
+Forwarded by the SecurityFocus mailing-list gateway.
+-----BEGIN PGP SIGNATURE-----
+gateway-specific-signature-material
+-----END PGP SIGNATURE-----
+To unsubscribe, manage your subscription.
+"""
+                extraction = extract(first)
+                store.save(first, extraction, [])
+                store.save(second, extraction, [])
+                outcomes = execute_automatic_publication(store, PublicationPolicy(min_body_chars=20))
+                gcve_operations = [op for outcome in outcomes for op in outcome["operations"] if op["kind"] == "gcve"]
+                self.assertEqual(len(store.bcp03_publications()), 1)
+                self.assertEqual(gcve_operations[0]["id"], gcve_operations[1]["id"])
+                self.assertEqual(gcve_operations[1]["status"], "deduplicated")
+                self.assertEqual(gcve_operations[1]["method"], "fuzzy-content")
+            finally:
+                store.close()
+
+    def test_cross_source_fuzzy_dedup_rejects_conflicting_cves(self):
+        left = {"title": "Widget security advisory", "body": " ".join(["widget overflow details"] * 20),
+                "extraction": {"cve_ids": ["CVE-2026-1000"], "product_hint": "Widget"}}
+        right = {"title": "[list] Widget security advisory", "body": left["body"] + " gateway footer",
+                 "extraction": {"cve_ids": ["CVE-2026-2000"], "product_hint": "Widget"}}
+        self.assertFalse(Store._fuzzy_duplicate(left, right))
+
     def test_publication_can_target_one_approved_source(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / "source.sqlite")

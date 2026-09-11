@@ -61,6 +61,73 @@ class _MonthParser(HTMLParser):
             self.in_blockquote = False
 
 
+class _HyperKittyIndexParser(HTMLParser):
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.urls: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        href = dict(attrs).get("href") if tag == "a" else None
+        if href and "/message/" in href:
+            self.urls.append(urljoin(self.base_url, href))
+
+
+class _HyperKittyMessageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta: dict[str, str] = {}
+        self.body_depth = 0
+        self.title_depth = 0
+        self.author_depth = 0
+        self.title_parts: list[str] = []
+        self.author_parts: list[str] = []
+        self.body_parts: list[str] = []
+        self.links: list[str] = []
+        self.published = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        classes = set((values.get("class") or "").split())
+        if tag == "meta":
+            key = values.get("name") or values.get("property") or ""
+            self.meta[key.casefold()] = values.get("content") or ""
+        if self.body_depth:
+            self.body_depth += 1
+            if tag == "a" and values.get("href"):
+                self.links.append(values["href"] or "")
+            if tag in {"br", "p", "div", "li"}:
+                self.body_parts.append("\n")
+        elif "email-body" in classes:
+            self.body_depth = 1
+        if self.title_depth:
+            self.title_depth += 1
+        elif tag == "h1" or classes.intersection({"subject", "email-subject"}):
+            self.title_depth = 1
+        if self.author_depth:
+            self.author_depth += 1
+        elif classes.intersection({"sender-name", "email-sender", "author"}):
+            self.author_depth = 1
+        if tag == "time" and not self.published:
+            self.published = values.get("datetime") or ""
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.body_depth:
+            self.body_depth -= 1
+        if self.title_depth:
+            self.title_depth -= 1
+        if self.author_depth:
+            self.author_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.body_depth:
+            self.body_parts.append(data)
+        if self.title_depth:
+            self.title_parts.append(data)
+        if self.author_depth:
+            self.author_parts.append(data)
+
+
 def _safe_links(source_url: str, links: list[str]) -> list[str]:
     """Resolve usable HTTP references without rejecting the whole message.
 
@@ -115,11 +182,43 @@ def parse_month(html: str, base_url: str) -> list[str]:
     return list(dict.fromkeys(parser.urls))
 
 
+def parse_hyperkitty_index(html: str, base_url: str) -> list[str]:
+    parser = _HyperKittyIndexParser(base_url)
+    parser.feed(html)
+    return list(dict.fromkeys(parser.urls))
+
+
+def parse_hyperkitty_message(html: str, source_url: str) -> Message:
+    parser = _HyperKittyMessageParser()
+    parser.feed(html)
+    title = " ".join("".join(parser.title_parts).split())
+    title = title or parser.meta.get("og:title", "")
+    author = " ".join("".join(parser.author_parts).split())
+    body = "\n".join(line.strip() for line in "".join(parser.body_parts).splitlines() if line.strip())
+    message_id = parser.meta.get("message-id", "")
+    match = re.search(r"^Message-ID:\s*(\S+)", body, re.IGNORECASE | re.MULTILINE)
+    return Message(
+        source_url=source_url, title=title, author=author,
+        published=parser.published, body=body,
+        links=_safe_links(source_url, parser.links), raw_source=html,
+        source_format="text/html", message_id=message_id or (match.group(1) if match else ""),
+    )
+
+
 def parse_rss(xml_text: str) -> list[str]:
     root = ET.fromstring(xml_text)
     urls: list[str] = []
     for item in root.findall("./channel/item"):
         link = (item.findtext("link") or item.findtext("guid") or "").strip()
+        if link:
+            urls.append(link)
+    # HyperKitty exposes an Atom feed rather than RSS on some deployments.
+    namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    for entry in root.findall("atom:entry", namespace):
+        link_element = entry.find("atom:link[@rel='alternate']", namespace)
+        if link_element is None:
+            link_element = entry.find("atom:link", namespace)
+        link = (link_element.get("href", "") if link_element is not None else "").strip()
         if link:
             urls.append(link)
     return list(dict.fromkeys(urls))

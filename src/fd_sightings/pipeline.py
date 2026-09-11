@@ -67,6 +67,9 @@ def process_urls(
                 message, extraction, matches, analysis=analysis,
                 analysis_trigger="reprocess" if refresh else "import",
             )
+            clear_failure = getattr(store, "clear_import_failure", None)
+            if callable(clear_failure):
+                clear_failure(url)
             # A refreshed analysis can discover a vendor through either CPE
             # enrichment or an explicitly referenced vulnerability record.
             # Keep already published local records in sync as well as the
@@ -80,5 +83,8 @@ def process_urls(
                 store.update_published_affected(url, **correction)
             results.append(Result(message, extraction, matches))
         except (OSError, RuntimeError, ValueError) as exc:
+            record_failure = getattr(store, "record_import_failure", None)
+            if callable(record_failure):
+                record_failure(url, adapter.source_id if adapter else "", str(exc))
             results.append(Result(Message(url, ""), Extraction(), [], error=str(exc)))
     return results

@@ -62,6 +62,21 @@ class ImportWorkerManagerTests(unittest.TestCase):
                 manager.submit("2024-01", future)
             manager.executor.shutdown(wait=True)
 
+    def test_builds_failed_download_retry_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ImportWorkerManager(Path(directory) / "archive.sqlite")
+            captured = []
+            with patch("fd_sightings.workers.subprocess.run", side_effect=lambda command, **kwargs: captured.append(command) or type("Result", (), {"returncode": 0})()):
+                job = manager.submit_retry(limit=7, sources=["bugtraq", "full-disclosure"])
+                manager.executor.shutdown(wait=True)
+            self.assertEqual(captured[0][-8:], [
+                "--no-semantic", "retry-failed", "--source", "bugtraq",
+                "--source", "full-disclosure", "--limit", "7",
+            ])
+            stored = manager.get(job["id"])
+            self.assertEqual(stored["kind"], "retry")
+            self.assertEqual(stored["status"], "completed")
+
     def test_worker_history_is_bounded_before_job_files_are_loaded(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = ImportWorkerManager(Path(directory) / "archive.sqlite")

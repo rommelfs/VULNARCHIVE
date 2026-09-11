@@ -7,7 +7,7 @@ specific deployment.
 
 | Requirement | Status | Notes |
 |---|---|---|
-| Multiple sources | Implemented foundation | Full Disclosure and archive-only Bugtraq adapters; more adapters require code and tests |
+| Multiple sources | Implemented foundation | Full Disclosure plus current Bugtraq and Bugtraq AI HyperKitty adapters |
 | GNA 1988 publication | Implemented | Planning, allocation, context/new records, retry, ledger, API and dump |
 | CVE comparison and LLM enrichment | Implemented with safeguards | Explicit IDs, bounded retrieval, deterministic filters, optional evaluated LLM |
 | Manual approval for ambiguity | Implemented | Managed users, pending queue, event history, optional four-eyes |
@@ -20,16 +20,19 @@ specific deployment.
 
 ### Implemented
 
-- Source-adapter registry with `full-disclosure` and `bugtraq`.
+- Source-adapter registry with `full-disclosure`, `bugtraq`, and `bugtraq-ai`.
 - Repeatable `--source` on current-feed and archive workflows.
 - `VA_SOURCES` defaults for unattended sync and historical-import UI.
 - Per-source canonical keys and source metadata.
 - Historical workers with bounded date ranges and persisted job state.
 - Cross-source operation without collapsing the original provenance.
+- Persistent failed-download tracking and bounded retry through `retry-failed`.
+- Authenticated failed-download overview and asynchronous retry controls.
+- Conservative cross-source publication deduplication using Message-ID,
+  gateway-normalized content, or guarded word-shingle similarity.
 
 ### Limitations
 
-- Bugtraq is archive-only because no current RSS feed is configured.
 - Source configuration selects registered adapters; adding a completely new
   source still requires code, parser tests, and operational validation.
 - Historical data is not imported merely by adding a source to `VA_SOURCES`.

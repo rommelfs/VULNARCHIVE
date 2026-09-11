@@ -6,7 +6,9 @@ from typing import Protocol
 
 from .http import Client, HTTPError
 from .models import Message
-from .parsers import parse_message, parse_month, parse_rss
+from .parsers import (
+    parse_hyperkitty_index, parse_hyperkitty_message, parse_message, parse_month, parse_rss,
+)
 
 
 class SourceAdapter(Protocol):
@@ -55,14 +57,49 @@ class SeclistsAdapter:
             raise
 
 
+@dataclass(frozen=True, slots=True)
+class HyperKittyAdapter:
+    source_id: str
+    name: str
+    archive_url: str
+    feed_url: str
+
+    @property
+    def has_current_feed(self) -> bool:
+        return True
+
+    def parse(self, content: str, url: str) -> Message:
+        message = parse_hyperkitty_message(content, url)
+        message.source_id = self.source_id
+        return message
+
+    def feed(self, client: Client) -> list[str]:
+        return parse_rss(client.get_text(self.feed_url))
+
+    def month(self, client: Client, year: int, month: int) -> list[str]:
+        url = f"{self.archive_url.rstrip('/')}/{year}/{month}/"
+        try:
+            return parse_hyperkitty_index(client.get_text(url), url)
+        except HTTPError as exc:
+            if exc.status == 404:
+                return []
+            raise
+
+
 SOURCES: dict[str, SourceAdapter] = {
     "full-disclosure": SeclistsAdapter(
         "full-disclosure", "Full Disclosure",
         "https://seclists.org/fulldisclosure", "https://seclists.org/rss/fulldisclosure.rss",
     ),
-    "bugtraq": SeclistsAdapter(
+    "bugtraq": HyperKittyAdapter(
         "bugtraq", "Bugtraq",
-        "https://seclists.org/bugtraq", "",
+        "https://lists.securityfocus.com/hyperkitty/list/bugtraq@securityfocus.com",
+        "https://lists.securityfocus.com/hyperkitty/list/bugtraq@securityfocus.com/latest/feed",
+    ),
+    "bugtraq-ai": HyperKittyAdapter(
+        "bugtraq-ai", "Bugtraq AI",
+        "https://lists.securityfocus.com/hyperkitty/list/bugtraq@bugtraq.ai",
+        "https://lists.securityfocus.com/hyperkitty/list/bugtraq@bugtraq.ai/latest/feed",
     ),
 }
 
@@ -81,3 +118,10 @@ def configured_source_ids(value: str | None = None) -> list[str]:
 def adapters(source_ids: list[str] | None) -> list[SourceAdapter]:
     selected = source_ids if source_ids is not None else configured_source_ids()
     return [SOURCES[source_id] for source_id in dict.fromkeys(selected)]
+
+
+def adapter_for_url(url: str) -> SourceAdapter | None:
+    return next(
+        (adapter for adapter in SOURCES.values() if url.startswith(adapter.archive_url.rstrip("/") + "/")),
+        None,
+    )

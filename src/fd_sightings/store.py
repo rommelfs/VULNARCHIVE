@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,14 @@ CREATE TABLE IF NOT EXISTS sources (
     source_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS import_failures (
+    source_url TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    error TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    first_failed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_failed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS submissions (
     source_url TEXT NOT NULL,
@@ -158,6 +167,32 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
         self._migrate()
+
+    def record_import_failure(self, source_url: str, source_id: str, error: str) -> None:
+        self.db.execute(
+            """INSERT INTO import_failures(source_url, source_id, error) VALUES(?,?,?)
+            ON CONFLICT(source_url) DO UPDATE SET source_id=excluded.source_id,
+            error=excluded.error, attempts=import_failures.attempts+1,
+            last_failed_at=CURRENT_TIMESTAMP""",
+            (source_url, source_id, error),
+        )
+        self.db.commit()
+
+    def clear_import_failure(self, source_url: str) -> None:
+        self.db.execute("DELETE FROM import_failures WHERE source_url=?", (source_url,))
+        self.db.commit()
+
+    def import_failures(self, source_ids: list[str] | None = None) -> list[dict[str, object]]:
+        self.db.row_factory = sqlite3.Row
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            rows = self.db.execute(
+                f"SELECT * FROM import_failures WHERE source_id IN ({placeholders}) ORDER BY last_failed_at",
+                source_ids,
+            )
+        else:
+            rows = self.db.execute("SELECT * FROM import_failures ORDER BY last_failed_at")
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _password_hash(password: str) -> str:
@@ -1359,6 +1394,103 @@ class Store:
                 for identifier in candidate["reviewed_vulnerability_ids"]
             ]
         return candidates
+
+    @staticmethod
+    def _normalized_subject(value: object) -> str:
+        subject = str(value or "").casefold()
+        # Lists and gateways commonly add multiple routing markers.
+        previous = None
+        while subject != previous:
+            previous = subject
+            subject = re.sub(r"^\s*(?:(?:re|fw|fwd)\s*:\s*|\[[^\]]{1,40}\]\s*)", "", subject)
+        return " ".join(re.findall(r"[a-z0-9][a-z0-9_.+-]*", subject))
+
+    @staticmethod
+    def _normalized_body(value: object) -> str:
+        body = str(value or "").casefold().replace("\r\n", "\n")
+        body = re.sub(
+            r"-----begin pgp signature-----.*?-----end pgp signature-----", " ", body,
+            flags=re.DOTALL,
+        )
+        body = re.sub(r"-----begin pgp signed message-----\s*(?:hash:[^\n]*\n)?", "", body)
+        lines = []
+        for line in body.splitlines():
+            stripped = line.strip()
+            if re.match(r"^(?:list-|x-mailing-list|x-beenthere|precedence|delivered-to):", stripped):
+                continue
+            if any(marker in stripped for marker in (
+                "to unsubscribe", "mailing list archive", "/mailman/listinfo/", "manage your subscription",
+            )):
+                continue
+            lines.append(line)
+        return " ".join(re.findall(r"[a-z0-9][a-z0-9_.+-]*", "\n".join(lines)))
+
+    @classmethod
+    def _observation_fingerprint(cls, row: dict[str, object]) -> str:
+        normalized = cls._normalized_subject(row.get("title")) + "\n" + cls._normalized_body(row.get("body"))
+        return hashlib.sha256(normalized.encode()).hexdigest()
+
+    @staticmethod
+    def _shingles(value: str, size: int = 4) -> set[tuple[str, ...]]:
+        words = value.split()
+        return {tuple(words[index:index + size]) for index in range(max(0, len(words) - size + 1))}
+
+    @classmethod
+    def _fuzzy_duplicate(cls, left: dict[str, object], right: dict[str, object]) -> bool:
+        left_extraction = dict(left.get("extraction") or {})
+        right_extraction = dict(right.get("extraction") or {})
+        left_ids = {str(item).upper() for item in left_extraction.get("cve_ids") or []}
+        right_ids = {str(item).upper() for item in right_extraction.get("cve_ids") or []}
+        if left_ids and right_ids and left_ids.isdisjoint(right_ids):
+            return False
+        left_product = str(left_extraction.get("product_hint") or "").casefold().strip()
+        right_product = str(right_extraction.get("product_hint") or "").casefold().strip()
+        if left_product and right_product and left_product != right_product:
+            return False
+        subject_similarity = SequenceMatcher(
+            None, cls._normalized_subject(left.get("title")), cls._normalized_subject(right.get("title")),
+            autojunk=False,
+        ).ratio()
+        left_shingles = cls._shingles(cls._normalized_body(left.get("body")))
+        right_shingles = cls._shingles(cls._normalized_body(right.get("body")))
+        if min(len(left_shingles), len(right_shingles)) < 20:
+            return False
+        overlap = len(left_shingles & right_shingles)
+        jaccard = overlap / len(left_shingles | right_shingles)
+        containment = overlap / min(len(left_shingles), len(right_shingles))
+        return subject_similarity >= 0.88 and (jaccard >= 0.72 or containment >= 0.90)
+
+    def published_duplicate(self, candidate: dict[str, object]) -> tuple[str, dict[str, object], str] | None:
+        """Find an already-published copy from another mailing-list source.
+
+        Message-ID is the strongest cross-list identity. A gateway-tolerant
+        fingerprint and conservative shingle similarity cover
+        changed subjects, transport headers, list footers, and PGP signatures.
+        """
+        self.db.row_factory = sqlite3.Row
+        rows = self.db.execute(
+            """SELECT o.*, p.gcve_id FROM observations o
+            JOIN automatic_publications p ON p.source_url=o.source_url
+            WHERE p.kind='gcve' AND p.status='published' AND p.gcve_id<>''
+              AND o.source_url<>? AND o.source_id<>?""",
+            (candidate["source_url"], candidate.get("source_id", "")),
+        )
+        message_id = str(candidate.get("message_id") or "").strip().casefold()
+        fingerprint = self._observation_fingerprint(candidate)
+        for row in rows:
+            item = self._decode(row, include_body=True)
+            same_message = message_id and str(item.get("message_id") or "").strip().casefold() == message_id
+            exact_content = (
+                len(self._normalized_body(candidate.get("body")).split()) >= 20
+                and self._observation_fingerprint(item) == fingerprint
+            )
+            fuzzy_content = self._fuzzy_duplicate(candidate, item)
+            if same_message or exact_content or fuzzy_content:
+                record = self.gcve_record(str(row["gcve_id"]))
+                if record:
+                    method = "message-id" if same_message else "normalized-content" if exact_content else "fuzzy-content"
+                    return str(row["gcve_id"]), record, method
+        return None
 
     def publication_rows(self) -> list[dict[str, object]]:
         self.db.row_factory = sqlite3.Row

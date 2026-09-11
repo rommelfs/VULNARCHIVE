@@ -13,7 +13,7 @@ from .parsers import parse_rss
 from .pipeline import Result, process_urls
 from .store import Store
 from .vulnerability_lookup import VulnerabilityLookup
-from .sources import SOURCES, SourceAdapter, adapters
+from .sources import SOURCES, SourceAdapter, adapter_for_url, adapters
 
 
 DEFAULT_ARCHIVE = "https://seclists.org/fulldisclosure"
@@ -77,6 +77,10 @@ def make_parser() -> argparse.ArgumentParser:
     rescan = sub.add_parser("rescan", help="Re-analyze every stored observation")
     rescan.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     rescan.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
+
+    retry = sub.add_parser("retry-failed", help="Retry posts whose download previously failed")
+    retry.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
+    retry.add_argument("--limit", type=int, default=0)
 
     export = sub.add_parser("export", help="Export review data as JSON Lines")
     export.add_argument("--status", choices=["matched", "unmatched"])
@@ -304,7 +308,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({"import": _summary(results, args.vl_url), "publications": publications}, indent=2))
         elif args.command == "url":
-            results = _process(args, [args.url], store, source_client, lookup, cpe_registry=cpe_registry)
+            results = _process(
+                args, [args.url], store, source_client, lookup,
+                adapter_for_url(args.url), cpe_registry,
+            )
             print(json.dumps(_summary(results, args.vl_url), indent=2))
         elif args.command == "rescan":
             rows = store.rows()
@@ -322,6 +329,24 @@ def main(argv: list[str] | None = None) -> int:
                     urls, source_client=source_client, lookup=lookup, store=store,
                     semantic=not args.no_semantic, refresh=True, progress=_progress,
                     adapter=adapter, cpe_registry=cpe_registry,
+                ))
+            print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
+        elif args.command == "retry-failed":
+            selected = args.sources or list(SOURCES)
+            failures = store.import_failures(selected)
+            if args.limit:
+                failures = failures[:args.limit]
+            # A failed refresh can coexist with an older stored observation.
+            # Force retrieval so ``seen`` never turns a requested retry into a skip.
+            args.refresh = True
+            aggregate = []
+            for adapter in adapters(selected):
+                urls = [
+                    str(row["source_url"]) for row in failures
+                    if row["source_id"] == adapter.source_id
+                ]
+                aggregate.extend(_process(
+                    args, urls, store, source_client, lookup, adapter, cpe_registry,
                 ))
             print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         elif args.command == "archive":

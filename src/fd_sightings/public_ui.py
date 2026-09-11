@@ -87,6 +87,7 @@ class PublicHandler(BaseHTTPRequestHandler):
 <p>Public mailing-list archive and GCVE publication feed for GNA 1988.</p>
 <ul><li><a href=\"/api/gcve/publication\">GCVE publication API</a></li>
 <li><a href=\"/dumps/gna-1988.ndjson\">GNA 1988 NDJSON dump</a></li>
+<li><a href=\"/vulnerability/\">Local vulnerabilities</a></li>
 <li><a href=\"/archive/\">Mailing-list archive</a></li></ul>
 
 <section class=\"card\"><h2>GCVE and Best Current Practices</h2>
@@ -137,6 +138,8 @@ instances</a> regardless of identifier format.</p>
                 self._json({"error": "not found"}, 404)
             else:
                 self._archive_item(content_hash)
+        elif parsed.path == "/vulnerability/":
+            self._vulnerability_index(parsed.query)
         elif parsed.path.startswith("/vulnerability/"):
             self._vulnerability(parsed.path.removeprefix("/vulnerability/").strip("/"))
         else:
@@ -288,6 +291,33 @@ instances</a> regardless of identifier format.</p>
             f'<h2>{html.escape(title)}</h2>{human}'
             f'<details><summary>Raw JSON</summary><pre>{rendered}</pre></details></div>',
         ), "text/html; charset=utf-8")
+
+    def _vulnerability_index(self, query: str) -> None:
+        params = urllib.parse.parse_qs(query, keep_blank_values=True)
+        try:
+            page = _positive_int(params, "page", 1, 1_000_000)
+            per_page = _positive_int(params, "per_page", 50, 100)
+        except ValueError as exc:
+            self._send(_public_layout("Invalid query", f'<h1>Invalid query</h1><p>{_e(exc)}</p>'), "text/html; charset=utf-8", 400)
+            return
+        records = self.server.store.published_gcve_records()
+        records.sort(key=lambda item: str(item.get("cveMetadata", {}).get("vulnId", "")), reverse=True)
+        total, pages = len(records), max(1, math.ceil(len(records) / per_page))
+        page = min(page, pages)
+        cards = []
+        for record in records[(page - 1) * per_page:page * per_page]:
+            metadata, cna = record.get("cveMetadata", {}), record.get("containers", {}).get("cna", {})
+            identifier = str(metadata.get("vulnId", ""))
+            descriptions = cna.get("descriptions", []) if isinstance(cna, dict) else []
+            summary = next((str(item.get("value", "")) for item in descriptions if isinstance(item, dict)), "")
+            cards.append(f'<article class="card"><h2><a href="/vulnerability/{urllib.parse.quote(identifier)}">{html.escape(identifier)}</a></h2><h3>{html.escape(str(cna.get("title") or identifier))}</h3><p>{html.escape(summary[:400])}</p></article>')
+        links = [f'<li>Page {page} of {pages} · {total} vulnerabilities</li>']
+        if page > 1:
+            links.insert(0, f'<li><a rel="prev" href="/vulnerability/?page={page - 1}&amp;per_page={per_page}">Previous</a></li>')
+        if page < pages:
+            links.append(f'<li><a rel="next" href="/vulnerability/?page={page + 1}&amp;per_page={per_page}">Next</a></li>')
+        content = f'<div class="panel"><h1>Local vulnerabilities</h1>{"".join(cards) or "<p>No local vulnerabilities published.</p>"}<nav><ul class="pagination">{"".join(links)}</ul></nav></div>'
+        self._send(_public_layout("Local vulnerabilities", content), "text/html; charset=utf-8")
 
 
 def serve(store: Store, bind: str = "127.0.0.1", port: int = 8766) -> None:
