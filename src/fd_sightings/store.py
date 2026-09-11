@@ -742,7 +742,24 @@ class Store:
         )
 
     def update_published_affected(
-        self, source_url: str, vendor: str = "", product: str = "",
+        self, source_url: str, *args: object, **changes: object,
+    ) -> int:
+        """Compatibility entry point for affected-metadata corrections.
+
+        Older callers may still send ``previous_product`` and newer callers
+        omit it.  Accept both forms without making that migration-only value
+        part of the repair implementation's required interface.
+        """
+        vendor = str(changes.pop("vendor", args[0] if args else "") or "")
+        product = str(changes.pop("product", args[1] if len(args) > 1 else "") or "")
+        changes.pop("previous_product", None)
+        if len(args) > 2 or changes:
+            unexpected = ", ".join(sorted(changes)) or "positional arguments"
+            raise TypeError(f"unexpected affected correction arguments: {unexpected}")
+        return self._update_published_affected(source_url, vendor, product)
+
+    def _update_published_affected(
+        self, source_url: str, vendor: str, product: str,
     ) -> int:
         """Correct placeholder or identifier-like affected metadata.
 

@@ -218,6 +218,12 @@ class CPERegistryTests(unittest.TestCase):
                 self.assertEqual(updated, 1)
                 affected = store.gcve_record("GCVE-1988-2026-0314")["containers"]["cna"]["affected"]
                 self.assertEqual(affected, [{"vendor": "Acme", "product": "Mail Gateway"}])
+                # Migration-era callers supplied this keyword. It remains
+                # accepted, but is no longer required.
+                self.assertEqual(store.update_published_affected(
+                    "source", vendor="Acme", product="Mail Gateway",
+                    previous_product="CVE-2026-52307",
+                ), 0)
             finally:
                 store.close()
 

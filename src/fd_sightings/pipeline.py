@@ -45,8 +45,15 @@ def process_urls(
         try:
             # One retry bounds a stalled archive item while allowing the rest of
             # the month to continue and be summarized.
-            previous = store.get(url) if refresh else None
-            previous_extraction = dict(previous.get("extraction") or {}) if previous else {}
+            # Lightweight test/protocol stores are not required to implement
+            # ``get``. A refresh must therefore never assume that optional read
+            # capability merely to perform the subsequent correction.
+            store_get = getattr(store, "get", None)
+            previous_product: str | None = None
+            if refresh and callable(store_get):
+                previous = store_get(url)
+                previous_extraction = dict(previous.get("extraction") or {}) if previous else {}
+                previous_product = str(previous_extraction.get("product_hint") or "")
             html = source_client.get_text(url, retries=1)
             message = adapter.parse(html, url) if adapter else parse_message(html, url)
             extraction = extract(message)
@@ -65,9 +72,12 @@ def process_urls(
             # Keep already published local records in sync as well as the
             # observation used for future publication plans.
             if refresh and extraction.vendor_hint:
-                store.update_published_affected(
-                    url, vendor=extraction.vendor_hint, product=extraction.product_hint,
-                )
+                correction = {
+                    "vendor": extraction.vendor_hint, "product": extraction.product_hint,
+                }
+                if previous_product is not None:
+                    correction["previous_product"] = previous_product
+                store.update_published_affected(url, **correction)
             results.append(Result(message, extraction, matches))
         except (OSError, RuntimeError, ValueError) as exc:
             results.append(Result(Message(url, ""), Extraction(), [], error=str(exc)))
