@@ -74,6 +74,15 @@ class PublicUITest(unittest.TestCase):
         _, security, _ = self.get("/.well-known/security.txt")
         self.assertEqual(b"GCVE: https://vuln.freearchive.org\n", security)
 
+    def test_local_vulnerability_overview_is_paginated(self) -> None:
+        _, body, content_type = self.get("/vulnerability/?per_page=1")
+        page = body.decode()
+        self.assertEqual("text/html", content_type)
+        self.assertIn("Local vulnerabilities", page)
+        self.assertIn("Page 1 of 2 · 2 vulnerabilities", page)
+        self.assertIn('rel="next"', page)
+        self.assertIn("/vulnerability/GCVE-1988-2026-2", page)
+
     def test_home_page_explains_gcve_bcp_and_links_reference_implementations(self) -> None:
         _, body, content_type = self.get("/")
         page = body.decode()
@@ -88,6 +97,7 @@ class PublicUITest(unittest.TestCase):
             "https://gcve.eu/bcp/gcve-bcp-05/",
         ):
             self.assertIn(f'href="{link}"', page)
+        self.assertIn('href="/vulnerability/"', page)
         self.assertIn("descriptive rather than prescriptive", page)
         self.assertIn("second reference implementation of the GCVE BCPs", page)
 

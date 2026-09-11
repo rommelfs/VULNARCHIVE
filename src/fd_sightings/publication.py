@@ -311,6 +311,23 @@ def execute_automatic_publication(
         if previous and previous["status"] == "failed" and not retry_failed:
             current.append({"kind": "gcve", "id": previous["gcve_id"], "status": "failed-not-retried"})
             continue
+        duplicate = store.published_duplicate(row) if not previous else None
+        if duplicate:
+            gcve_id, payload, duplicate_method = duplicate
+            if dry_run:
+                current.append({"kind": "gcve", "id": gcve_id, "status": "duplicate-existing", "method": duplicate_method})
+            else:
+                store.save_publication(
+                    plan.source_url, key, "gcve", gcve_id=gcve_id,
+                    status="published", payload=payload,
+                )
+                current.append({"kind": "gcve", "id": gcve_id, "status": "deduplicated", "method": duplicate_method})
+                if policy.publish_sightings:
+                    _publish_sighting(
+                        store, row, plan, gcve_id, current,
+                        dry_run=False, retry_failed=retry_failed,
+                    )
+            continue
         if dry_run:
             preview_id = f"GCVE-{policy.gna_id}-{publication_year(row)}-<reserved>"
             current.append({"kind": "gcve", "status": "dry-run", "payload": build_gcve_record(row, preview_id, plan, policy)})

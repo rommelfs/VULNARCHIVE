@@ -100,6 +100,23 @@ class ImportWorkerManager:
         self.executor.submit(self._run, job_id)
         return job
 
+    def submit_retry(self, *, limit: int = 0, sources: list[str] | None = None) -> dict[str, Any]:
+        if limit < 0 or limit > 10_000:
+            raise ValueError("retry limit must be between 0 and 10000")
+        source_ids = list(dict.fromkeys(sources if sources is not None else configured_source_ids()))
+        if not source_ids or any(source_id not in SOURCES for source_id in source_ids):
+            raise ValueError("select at least one supported source")
+        job_id = uuid.uuid4().hex
+        job: dict[str, Any] = {
+            "id": job_id, "kind": "retry", "status": "queued", "limit": limit,
+            "sources": source_ids, "created_at": _now(), "started_at": "", "finished_at": "",
+            "return_code": None, "error": "", "log": str(self.directory / f"{job_id}.log"),
+        }
+        with self.lock:
+            self._write(job)
+        self.executor.submit(self._run, job_id)
+        return job
+
     def _run(self, job_id: str) -> None:
         with self.lock:
             job = self.get(job_id)
@@ -111,11 +128,14 @@ class ImportWorkerManager:
         command = [
             sys.executable, "-m", "fd_sightings.cli", "--db", str(self.database),
         ]
-        if not job["semantic"]:
-            command.append("--no-semantic")
-        if job.get("refresh"):
-            command.append("--refresh")
-        command.extend(["archive", "--from-period", job["from_period"], "--to-period", job["to_period"]])
+        if job.get("kind") == "retry":
+            command.extend(["--no-semantic", "retry-failed"])
+        else:
+            if not job["semantic"]:
+                command.append("--no-semantic")
+            if job.get("refresh"):
+                command.append("--refresh")
+            command.extend(["archive", "--from-period", job["from_period"], "--to-period", job["to_period"]])
         for source_id in job.get("sources") or ["full-disclosure"]:
             command.extend(["--source", source_id])
         if job["limit"]:
@@ -129,7 +149,7 @@ class ImportWorkerManager:
             job["return_code"] = result.returncode
             job["status"] = "completed" if result.returncode == 0 else "failed"
             if result.returncode:
-                job["error"] = f"archive command exited with status {result.returncode}"
+                job["error"] = f"import command exited with status {result.returncode}"
         except Exception as exc:
             job["status"] = "failed"
             job["error"] = str(exc)

@@ -305,14 +305,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         try:
             limit = int(data.get("limit", ["0"])[0] or 0)
-            job = self.server.workers.submit(
-                data.get("from_period", [""])[0],
-                data.get("to_period", [""])[0],
-                limit=limit,
-                semantic=data.get("semantic", [""])[0] == "1",
-                refresh=data.get("refresh", [""])[0] == "1",
-                sources=data.get("source", []),
-            )
+            if data.get("action", [""])[0] == "retry":
+                job = self.server.workers.submit_retry(limit=limit, sources=data.get("source", []))
+            else:
+                job = self.server.workers.submit(
+                    data.get("from_period", [""])[0], data.get("to_period", [""])[0],
+                    limit=limit, semantic=data.get("semantic", [""])[0] == "1",
+                    refresh=data.get("refresh", [""])[0] == "1", sources=data.get("source", []),
+                )
         except (ValueError, OSError) as exc:
             self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
             return
@@ -330,7 +330,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             detail = (f'<div class="panel"><div class="toolbar"><a href="/workers">← Worker list</a>'
                       f'<a class="button secondary" href="{_e(refresh_url)}">Refresh now</a></div>'
                       f'<h1>Worker {_e(selected["id"])}</h1>'
-                      f'<p>Sources: <strong>{_e(sources)}</strong></p>'
+                      f'<p>Job: <strong>{_e(selected.get("kind", "archive"))}</strong> · Sources: <strong>{_e(sources)}</strong></p>'
                       f'<p>Status: <strong>{_e(selected["status"])}</strong> · Return code: {_e(selected.get("return_code"))}</p>'
                       f'<p class="muted">{feedback}</p>'
                       f'<pre>{_e(log or "No output yet.")}</pre></div>')
@@ -340,7 +340,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         jobs = self.server.workers.jobs(limit=100)
         rows = "".join(
             f'<tr><td><a href="{_e("/workers?" + urllib.parse.urlencode({"job": job["id"]}))}">{_e(job["id"][:10])}</a></td>'
-            f'<td>{_e(job["from_period"])} – {_e(job["to_period"])}</td><td class="{_e(job["status"])}">{_e(job["status"])}</td>'
+            f'<td>{_e("failed downloads" if job.get("kind") == "retry" else str(job["from_period"]) + " – " + str(job["to_period"]))}</td><td class="{_e(job["status"])}">{_e(job["status"])}</td>'
             f'<td>{_e(job["created_at"])}</td></tr>' for job in jobs
         )
         now = datetime.now(timezone.utc)
@@ -356,10 +356,19 @@ class ReviewHandler(BaseHTTPRequestHandler):
             for source_id, adapter in SOURCES.items()
         )
         unattended = ", ".join(SOURCES[source_id].name for source_id in enabled_sources)
+        failures = self.server.store.import_failures()
+        failure_rows = "".join(
+            f'<tr><td>{_e(row["source_id"])}</td><td><a rel="noreferrer" href="{_e(row["source_url"])}">{_e(row["source_url"])}</a></td>'
+            f'<td>{_e(row["attempts"])}</td><td>{_e(row["error"])}</td></tr>' for row in failures
+        )
         content = f'''<div class="panel"><h1>Import source configuration</h1>
 <p>Unattended RSS/sync sources currently loaded by this service: <strong>{_e(unattended)}</strong>.</p>
-<p class="muted">Full Disclosure has a current RSS feed. Bugtraq is an archive-only source and therefore imports no posts during <code>sync</code>; select Bugtraq and an historical month range below to backfill it.</p>
+<p class="muted">Full Disclosure and both SecurityFocus Bugtraq lists have current feeds. Historical month imports remain available for source ranges exposed by their servers.</p>
 <p class="muted">The checkboxes below apply only to the new historical worker. To change unattended sync, set <code>VA_SOURCES</code> in <code>/etc/vulnarchive/vulnarchive.env</code> and restart <code>vulnarchive-review.service</code> and <code>vulnarchive-sync.timer</code>. The web service deliberately cannot edit the root-owned environment file or invoke systemctl.</p></div>
+<div class="panel"><h2>Failed post downloads</h2>
+<form method="post" action="/workers" class="toolbar"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}"><input type="hidden" name="action" value="retry">
+{source_controls}<label>Limit <input type="number" name="limit" value="0" min="0" max="10000"></label><button>Retry failed downloads</button></form>
+<table><thead><tr><th>Source</th><th>Post</th><th>Attempts</th><th>Last error</th></tr></thead><tbody>{failure_rows or '<tr><td colspan="4">No failed downloads.</td></tr>'}</tbody></table></div>
 <div class="panel"><h1>Historical archive imports</h1>
 <p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">

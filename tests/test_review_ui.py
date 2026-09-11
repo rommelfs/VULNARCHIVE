@@ -212,6 +212,10 @@ class ReviewUITest(unittest.TestCase):
                 self.submitted.append((start, end, limit, semantic, refresh, sources))
                 return {"id": "abc123"}
 
+            def submit_retry(self, *, limit=0, sources=None):
+                self.submitted.append(("retry", limit, sources))
+                return {"id": "retry123"}
+
             def jobs(self, *, limit=100):
                 self.job_list_calls += 1
                 self.assert_limit = limit
@@ -246,8 +250,10 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("deliberately cannot edit", page)
         self.assertIn('name="source" value="full-disclosure" checked', page)
         self.assertIn('name="source" value="bugtraq"', page)
-        self.assertIn("Bugtraq (historical archive only)", page)
-        self.assertIn("imports no posts during", page)
+        self.assertIn('name="source" value="bugtraq-ai"', page)
+        self.assertIn("both SecurityFocus Bugtraq lists have current feeds", page)
+        self.assertIn("Failed post downloads", page)
+        self.assertIn("Retry failed downloads", page)
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,
@@ -282,6 +288,17 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("Refresh now", live_page)
         self.assertNotIn("Most recent workers", live_page)
         self.assertNotIn("Historical archive imports", live_page)
+
+        retry_data = urllib.parse.urlencode({
+            "csrf": self.server.csrf_token, "action": "retry", "limit": "3", "source": "bugtraq",
+        }).encode()
+        retry_request = self.request("/workers", method="POST")
+        retry_request.data = retry_data
+        retry_request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with self.assertRaises(urllib.error.HTTPError) as redirected:
+            urllib.request.build_opener(NoRedirect()).open(retry_request)
+        self.assertEqual(redirected.exception.code, 303)
+        self.assertIn(("retry", 3, ["bugtraq"]), workers.submitted)
 
     def test_approved_observation_links_to_publication_and_published_record(self) -> None:
         source = "https://seclists.org/fulldisclosure/2026/Sep/42"
