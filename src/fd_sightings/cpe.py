@@ -77,8 +77,8 @@ class CPERegistry:
         }
         return matches[0] if matches and len(identities) == 1 else None
 
-    def _vendor_prefix(self, product: str) -> dict[str, object] | None:
-        """Resolve an unambiguous vendor prefix from a combined product name."""
+    def _vendor_prefix(self, product: str) -> tuple[dict[str, object], str] | None:
+        """Resolve a vendor prefix and return the remaining canonical product."""
         product_words = _words(product)
         if not product_words:
             return None
@@ -95,7 +95,16 @@ class CPERegistry:
         longest = max(length for length, _ in prefixes)
         matches = [item for length, item in prefixes if length == longest]
         identities = {str(item.get("uuid") or "") for item in matches}
-        return matches[0] if len(identities) == 1 else None
+        if len(identities) != 1:
+            return None
+        match = matches[0]
+        prefix_length = max(
+            len(words) for value in (match.get("name"), match.get("title"))
+            if (words := _words(value)) and product_words[:len(words)] == words
+        )
+        display_words = product.split()
+        remainder = " ".join(display_words[prefix_length:]).strip()
+        return (match, remainder) if remainder else None
 
     def enrich(self, extraction: Extraction) -> Extraction:
         """Fill a missing vendor only when one unambiguous product is found.
@@ -105,10 +114,10 @@ class CPERegistry:
         normalized name/title match and a unique product/vendor identity.
         Registry availability must never prevent preservation of a message.
         """
-        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
+        if (not extraction.product_hint or not self.base_url
                 or _identifier_namespace(extraction.product_hint)):
             return extraction
-        if match := self._product(extraction.product_hint):
+        if match := self._product(extraction.product_hint, extraction.vendor_hint):
             vendor = str(match.get("vendor_title") or match["vendor_name"])
             if _identifier_namespace(vendor):
                 return extraction
@@ -122,13 +131,16 @@ class CPERegistry:
         # example, "Apple macOS"), while the CPE product token is only
         # "macos".  In that case product suggestions cannot match the complete
         # extracted phrase. Resolve the prefix through the vendor endpoint.
-        match = self._vendor_prefix(extraction.product_hint)
-        if not match:
+        prefix = self._vendor_prefix(extraction.product_hint)
+        if not prefix:
             return extraction
+        match, product = prefix
         vendor = str(match.get("title") or match.get("name"))
-        if _identifier_namespace(vendor):
+        if (_identifier_namespace(vendor) or extraction.vendor_hint
+                and _identity(extraction.vendor_hint) != _identity(vendor)):
             return extraction
         extraction.vendor_hint = vendor
+        extraction.product_hint = product
         extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
         return extraction
 
@@ -142,21 +154,16 @@ class CPERegistry:
             raw = row.get("extraction")
             values = raw if isinstance(raw, dict) else {}
             extraction = Extraction(**{key: value for key, value in values.items() if key in allowed})
-            before = (
-                extraction.product_hint, extraction.vendor_hint,
-                extraction.cpe_product_uuid, extraction.cpe_vendor_uuid,
-            )
+            before = extraction.as_dict()
             self.enrich(extraction)
-            after = (
-                extraction.product_hint, extraction.vendor_hint,
-                extraction.cpe_product_uuid, extraction.cpe_vendor_uuid,
-            )
-            if after != before and (extraction.cpe_product_uuid or extraction.cpe_vendor_uuid):
+            if extraction.as_dict() != before:
                 store.update_extraction(str(row["source_url"]), extraction)
-                publications_updated += store.update_published_affected(
-                    str(row["source_url"]), extraction.vendor_hint, extraction.product_hint,
-                    previous_product=before[0],
-                )
+                if extraction.vendor_hint:
+                    publications_updated += store.update_published_affected(
+                        str(row["source_url"]), vendor=extraction.vendor_hint,
+                        product=extraction.product_hint,
+                        previous_product=str(before.get("product_hint") or ""),
+                    )
                 enriched += 1
         return {
             "candidates": len(candidates),

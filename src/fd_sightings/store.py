@@ -712,7 +712,7 @@ class Store:
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
 
     def cpe_enrichment_candidates(self, limit: int = 0) -> list[dict[str, object]]:
-        """Return stored observations whose product/vendor can be validated."""
+        """Return observations whose product/vendor pair can be canonicalized."""
         self.db.row_factory = sqlite3.Row
         query = """SELECT * FROM observations
             WHERE COALESCE(json_extract(extraction_json, '$.product_hint'), '') <> ''
@@ -740,7 +740,8 @@ class Store:
         return self.update_published_affected(source_url, vendor=vendor)
 
     def update_published_affected(
-        self, source_url: str, *, previous_product: str = "", vendor: str = "", product: str = "",
+        self, source_url: str, *, vendor: str, product: str = "",
+        previous_product: str | None = None,
     ) -> int:
         """Correct placeholder or identifier-like affected metadata.
 
@@ -779,7 +780,8 @@ class Store:
                     )
                 )
                 invalid_product = invalid_product or bool(
-                    previous_product and old_product.casefold() == previous_product.casefold()
+                    previous_product is not None
+                    and old_product.casefold() == previous_product.casefold()
                 )
                 if vendor and invalid_vendor:
                     affected_product["vendor"] = vendor

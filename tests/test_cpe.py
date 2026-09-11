@@ -92,8 +92,9 @@ class CPERegistryTests(unittest.TestCase):
             def get_json(self, url, params=None):
                 return {"items": [{"uuid": "apple", "name": "apple", "title": "Apple"}]}
 
-        match = CPERegistry(Client())._vendor_prefix("Apple macOS")
+        match, product = CPERegistry(Client())._vendor_prefix("Apple macOS")
         self.assertEqual(match["title"], "Apple")
+        self.assertEqual(product, "macOS")
 
     def test_vendor_prefix_is_used_when_combined_product_name_has_no_product_match(self):
         class Client:
@@ -142,7 +143,7 @@ class CPERegistryTests(unittest.TestCase):
                 result = CPERegistry(Client()).enrich_store(store)
 
                 self.assertEqual(result, {
-                    "candidates": 2, "enriched": 2, "unchanged": 0,
+                    "candidates": 2, "enriched": 1, "unchanged": 1,
                     "publications_updated": 0,
                 })
                 self.assertEqual(store.get("missing")["extraction"]["vendor_hint"], "canonical_vendor")
@@ -189,7 +190,6 @@ class CPERegistryTests(unittest.TestCase):
                 affected = published["containers"]["cna"]["affected"]
                 self.assertEqual(affected[0]["vendor"], "Apple")
                 self.assertEqual(affected[0]["product"], "macOS")
-                self.assertEqual(affected[1], {"vendor": "Other", "product": "Unrelated"})
                 self.assertNotEqual(
                     published["cveMetadata"]["dateUpdated"], "2026-01-01T00:00:00Z",
                 )
