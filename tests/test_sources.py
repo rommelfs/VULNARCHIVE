@@ -41,6 +41,23 @@ class SourcesTest(unittest.TestCase):
         <link rel="alternate" href="https://lists.example/message/abc/"/></entry></feed>'''
         self.assertEqual(parse_rss(atom), ["https://lists.example/message/abc/"])
 
+    def test_hyperkitty_month_expands_threads_and_ignores_compose_link(self) -> None:
+        root = "https://lists.securityfocus.com/hyperkitty/list/bugtraq@securityfocus.com"
+        pages = {
+            root + "/2026/9/": '''<a href="/hyperkitty/list/bugtraq@securityfocus.com/message/new">Post</a>
+                <a href="/hyperkitty/list/bugtraq@securityfocus.com/thread/thread1/">Advisory</a>''',
+            root + "/thread/thread1/": '''<a href="/hyperkitty/list/bugtraq@securityfocus.com/message/first1/">permalink</a>''',
+            root + "/thread/thread1/replies": '''<a href="/hyperkitty/list/bugtraq@securityfocus.com/message/reply2/">permalink</a>''',
+        }
+
+        class Client:
+            def get_text(self, url):
+                return pages[url]
+
+        self.assertEqual(SOURCES["bugtraq"].month(Client(), 2026, 9), [
+            root + "/message/first1/", root + "/message/reply2/",
+        ])
+
     def test_cli_accepts_multiple_sources(self) -> None:
         args = make_parser().parse_args(["rss", "--source", "full-disclosure", "--source", "bugtraq"])
         self.assertEqual(args.sources, ["full-disclosure", "bugtraq"])

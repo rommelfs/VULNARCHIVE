@@ -7,7 +7,8 @@ from typing import Protocol
 from .http import Client, HTTPError
 from .models import Message
 from .parsers import (
-    parse_hyperkitty_index, parse_hyperkitty_message, parse_message, parse_month, parse_rss,
+    parse_hyperkitty_archive_page, parse_hyperkitty_index, parse_hyperkitty_message,
+    parse_message, parse_month, parse_rss,
 )
 
 
@@ -79,7 +80,34 @@ class HyperKittyAdapter:
     def month(self, client: Client, year: int, month: int) -> list[str]:
         url = f"{self.archive_url.rstrip('/')}/{year}/{month}/"
         try:
-            return parse_hyperkitty_index(client.get_text(url), url)
+            messages: list[str] = []
+            pending_pages = [url]
+            seen_pages: set[str] = set()
+            threads: list[str] = []
+            while pending_pages and len(seen_pages) < 100:
+                page_url = pending_pages.pop(0)
+                if page_url in seen_pages:
+                    continue
+                seen_pages.add(page_url)
+                found_messages, found_threads, next_pages = parse_hyperkitty_archive_page(
+                    client.get_text(page_url), page_url,
+                )
+                source_prefix = self.archive_url.rstrip("/") + "/"
+                messages.extend(item for item in found_messages if item.startswith(source_prefix))
+                threads.extend(item for item in found_threads if item.startswith(source_prefix))
+                pending_pages.extend(item for item in next_pages if item.startswith(url))
+            # Month pages list threads (and the compose link ``message/new``),
+            # not posts. Expand each thread's initial post and asynchronously
+            # rendered replies into stable message permalinks.
+            for thread_url in dict.fromkeys(threads):
+                messages.extend(parse_hyperkitty_index(client.get_text(thread_url), thread_url))
+                replies_url = thread_url.rstrip("/") + "/replies"
+                try:
+                    messages.extend(parse_hyperkitty_index(client.get_text(replies_url), replies_url))
+                except HTTPError as exc:
+                    if exc.status != 404:
+                        raise
+            return list(dict.fromkeys(messages))
         except HTTPError as exc:
             if exc.status == 404:
                 return []

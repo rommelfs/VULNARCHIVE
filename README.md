@@ -184,6 +184,10 @@ post downloads are retained in the database and can be attempted again with
 a successful import removes its failure entry. Unknown source names fail
 validation instead of being ignored.
 
+Historical HyperKitty month pages contain thread links rather than post links.
+The adapter expands each thread and its replies into stable `/message/<hash>/`
+permalinks and explicitly ignores the `/message/new` compose action.
+
 Administrators can also inspect and retry these failures under **Review →
 Archive imports**. The public viewer exposes a paginated list of locally
 published records at `/vulnerability/`. Before assigning a new GNA 1988 ID, the

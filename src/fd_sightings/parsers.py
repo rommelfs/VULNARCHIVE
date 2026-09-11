@@ -65,12 +65,22 @@ class _HyperKittyIndexParser(HTMLParser):
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
-        self.urls: list[str] = []
+        self.message_urls: list[str] = []
+        self.thread_urls: list[str] = []
+        self.next_urls: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        href = dict(attrs).get("href") if tag == "a" else None
-        if href and "/message/" in href:
-            self.urls.append(urljoin(self.base_url, href))
+        values = dict(attrs)
+        href = values.get("href") if tag == "a" else None
+        if not href:
+            return
+        resolved = urljoin(self.base_url, href)
+        if re.search(r"/message/(?!new(?:/|$))[A-Za-z0-9_]+/?(?:[?#].*)?$", resolved):
+            self.message_urls.append(resolved.split("?", 1)[0].split("#", 1)[0])
+        elif re.search(r"/thread/[A-Za-z0-9_]+/?(?:[?#].*)?$", resolved):
+            self.thread_urls.append(resolved.split("?", 1)[0].split("#", 1)[0])
+        if "next" in (values.get("rel") or "").split():
+            self.next_urls.append(resolved)
 
 
 class _HyperKittyMessageParser(HTMLParser):
@@ -80,11 +90,14 @@ class _HyperKittyMessageParser(HTMLParser):
         self.body_depth = 0
         self.title_depth = 0
         self.author_depth = 0
+        self.date_depth = 0
         self.title_parts: list[str] = []
         self.author_parts: list[str] = []
         self.body_parts: list[str] = []
         self.links: list[str] = []
         self.published = ""
+        self.date_parts: list[str] = []
+        self.message_id = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
@@ -106,10 +119,19 @@ class _HyperKittyMessageParser(HTMLParser):
             self.title_depth = 1
         if self.author_depth:
             self.author_depth += 1
-        elif classes.intersection({"sender-name", "email-sender", "author"}):
+        elif classes.intersection({"sender-name", "email-sender", "email-author", "author"}):
             self.author_depth = 1
+        if self.date_depth:
+            self.date_depth += 1
+        elif "email-date" in classes:
+            self.date_depth = 1
         if tag == "time" and not self.published:
             self.published = values.get("datetime") or ""
+        href = values.get("href") or ""
+        if "in-reply-to=" in href.casefold() and not self.message_id:
+            match = re.search(r"in-reply-to=(?:%3c|<)(.*?)(?:%3e|>)", href, re.IGNORECASE)
+            if match:
+                self.message_id = match.group(1)
 
     def handle_endtag(self, tag: str) -> None:
         if self.body_depth:
@@ -118,6 +140,8 @@ class _HyperKittyMessageParser(HTMLParser):
             self.title_depth -= 1
         if self.author_depth:
             self.author_depth -= 1
+        if self.date_depth:
+            self.date_depth -= 1
 
     def handle_data(self, data: str) -> None:
         if self.body_depth:
@@ -126,6 +150,8 @@ class _HyperKittyMessageParser(HTMLParser):
             self.title_parts.append(data)
         if self.author_depth:
             self.author_parts.append(data)
+        if self.date_depth:
+            self.date_parts.append(data)
 
 
 def _safe_links(source_url: str, links: list[str]) -> list[str]:
@@ -185,7 +211,17 @@ def parse_month(html: str, base_url: str) -> list[str]:
 def parse_hyperkitty_index(html: str, base_url: str) -> list[str]:
     parser = _HyperKittyIndexParser(base_url)
     parser.feed(html)
-    return list(dict.fromkeys(parser.urls))
+    return list(dict.fromkeys(parser.message_urls))
+
+
+def parse_hyperkitty_archive_page(html: str, base_url: str) -> tuple[list[str], list[str], list[str]]:
+    parser = _HyperKittyIndexParser(base_url)
+    parser.feed(html)
+    return (
+        list(dict.fromkeys(parser.message_urls)),
+        list(dict.fromkeys(parser.thread_urls)),
+        list(dict.fromkeys(parser.next_urls)),
+    )
 
 
 def parse_hyperkitty_message(html: str, source_url: str) -> Message:
@@ -195,11 +231,11 @@ def parse_hyperkitty_message(html: str, source_url: str) -> Message:
     title = title or parser.meta.get("og:title", "")
     author = " ".join("".join(parser.author_parts).split())
     body = "\n".join(line.strip() for line in "".join(parser.body_parts).splitlines() if line.strip())
-    message_id = parser.meta.get("message-id", "")
+    message_id = parser.meta.get("message-id", "") or parser.message_id
     match = re.search(r"^Message-ID:\s*(\S+)", body, re.IGNORECASE | re.MULTILINE)
     return Message(
         source_url=source_url, title=title, author=author,
-        published=parser.published, body=body,
+        published=parser.published or " ".join("".join(parser.date_parts).split()), body=body,
         links=_safe_links(source_url, parser.links), raw_source=html,
         source_format="text/html", message_id=message_id or (match.group(1) if match else ""),
     )
