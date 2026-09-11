@@ -311,8 +311,8 @@ class ParserTests(unittest.TestCase):
         ))
         self.assertEqual(extraction.product_hint, "Safari")
         self.assertEqual(
-            product_hint("SEC Consult SA-20260414-0 - Kiuwan SAST issue"),
-            "Kiuwan SAST issue",
+            product_hint("SEC Consult SA-20260414-0 - Kiuwan - Improper Enforcement"),
+            "Kiuwan",
         )
 
     def test_invalid_placeholder_link_does_not_reject_message(self):

@@ -77,6 +77,26 @@ class CPERegistry:
         }
         return matches[0] if matches and len(identities) == 1 else None
 
+    def _vendor_prefix(self, product: str) -> dict[str, object] | None:
+        """Resolve an unambiguous vendor prefix from a combined product name."""
+        product_words = _words(product)
+        if not product_words:
+            return None
+        prefixes: list[tuple[int, dict[str, object]]] = []
+        for item in self._suggest("vendors", product_words[0]):
+            lengths = [
+                len(words) for value in (item.get("name"), item.get("title"))
+                if (words := _words(value)) and product_words[:len(words)] == words
+            ]
+            if lengths:
+                prefixes.append((max(lengths), item))
+        if not prefixes:
+            return None
+        longest = max(length for length, _ in prefixes)
+        matches = [item for length, item in prefixes if length == longest]
+        identities = {str(item.get("uuid") or "") for item in matches}
+        return matches[0] if len(identities) == 1 else None
+
     def enrich(self, extraction: Extraction) -> Extraction:
         """Fill a missing vendor only when one unambiguous product is found.
 
@@ -98,69 +118,13 @@ class CPERegistry:
             extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
             return extraction
 
-    @staticmethod
-    def _unique(items: list[dict[str, object]], *keys: str) -> dict[str, object] | None:
-        identities = {tuple(str(item.get(key) or "") for key in keys) for item in items}
-        return items[0] if items and len(identities) == 1 else None
-
-    def _product(self, name: str, vendor: str = "") -> dict[str, object] | None:
-        matches = self._exact(self._suggest("products", name), name)
-        if vendor and vendor.casefold() not in PLACEHOLDERS:
-            compatible = [
-                item for item in matches
-                if _identity(vendor) in {
-                    _identity(item.get("vendor_name")), _identity(item.get("vendor_title")),
-                }
-            ]
-            if compatible:
-                matches = compatible
-        matches = [item for item in matches if item.get("vendor_name")]
-        return self._unique(matches, "uuid", "vendor_uuid")
-
-    def _vendor(self, name: str) -> dict[str, object] | None:
-        return self._unique(self._exact(self._suggest("vendors", name), name), "uuid")
-
-    @staticmethod
-    def _apply_product(extraction: Extraction, match: dict[str, object]) -> None:
-        vendor = str(match.get("vendor_title") or match.get("vendor_name") or "")
-        if not vendor or _identifier_namespace(vendor):
-            return
-        extraction.product_hint = str(match.get("title") or match.get("name") or extraction.product_hint)
-        extraction.vendor_hint = vendor
-        extraction.cpe_product_uuid = str(match.get("uuid") or "")
-        extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
-
-    def enrich(self, extraction: Extraction) -> Extraction:
-        """Canonicalize a product/vendor only when the registry is unambiguous.
-
-        Existing values are checked too: this lets a product match correct an
-        advisory author mistakenly extracted as its vendor. Registry failures
-        or ambiguous prefix results leave the original evidence untouched.
-        """
-        product = extraction.product_hint.strip()
-        if not product or not self.base_url or _identifier_namespace(product):
+        # Product names in advisories commonly include a vendor prefix (for
+        # example, "Apple macOS"), while the CPE product token is only
+        # "macos".  In that case product suggestions cannot match the complete
+        # extracted phrase. Resolve the prefix through the vendor endpoint.
+        match = self._vendor_prefix(extraction.product_hint)
+        if not match:
             return extraction
-        items = self._suggest("vendors", product_words[0])
-        prefixes: list[tuple[int, dict[str, object]]] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            remainder = " ".join(words[length:])
-            candidates = self._exact(self._suggest("products", remainder), remainder)
-            candidates = [
-                item for item in candidates
-                if str(item.get("vendor_uuid") or "") == str(vendor_match.get("uuid") or "")
-            ]
-            if lengths:
-                prefixes.append((max(lengths), item))
-        if not prefixes:
-            return extraction
-        longest = max(length for length, _ in prefixes)
-        matches = [item for length, item in prefixes if length == longest]
-        identities = {str(item.get("uuid") or "") for item in matches}
-        if len(identities) != 1:
-            return extraction
-        match = matches[0]
         vendor = str(match.get("title") or match.get("name"))
         if _identifier_namespace(vendor):
             return extraction

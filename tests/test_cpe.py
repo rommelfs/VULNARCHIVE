@@ -87,6 +87,14 @@ class CPERegistryTests(unittest.TestCase):
 
         self.assertIsNone(CPERegistry(Client())._product("Widget"))
 
+    def test_vendor_prefix_helper_has_no_external_local_state(self):
+        class Client:
+            def get_json(self, url, params=None):
+                return {"items": [{"uuid": "apple", "name": "apple", "title": "Apple"}]}
+
+        match = CPERegistry(Client())._vendor_prefix("Apple macOS")
+        self.assertEqual(match["title"], "Apple")
+
     def test_vendor_prefix_is_used_when_combined_product_name_has_no_product_match(self):
         class Client:
             def get_json(self, url, params=None):

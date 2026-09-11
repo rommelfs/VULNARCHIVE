@@ -87,6 +87,8 @@ def product_hint(title: str) -> str:
     stopwords = {"authenticated", "unauthenticated", "remote", "local", "multiple", "stored"}
     for token in tokens[:8]:
         bare = token.strip("()[],:;")
+        if selected and (not bare or bare in {"-", "–", "—", "|"}):
+            break
         if VERSION_TOKEN.match(bare) or bare.lower() in stopwords:
             break
         if bare.upper() in {"RCE", "XSS", "SSRF", "SQLI", "LPE"}:
