@@ -323,6 +323,24 @@ class ParserTests(unittest.TestCase):
             "Kiuwan",
         )
 
+    def test_generic_advisory_product_uses_vendor_name(self):
+        extraction = extract(Message(
+            "https://example.test/dovecot", "Security Advisory",
+            body="Vendor: Dovecot\nProduct: Security Advisory\nBuffer overflow vulnerability.",
+        ))
+
+        self.assertEqual(extraction.vendor_hint, "Dovecot")
+        self.assertEqual(extraction.product_hint, "Dovecot")
+
+    def test_generic_advisory_title_uses_vendor_name(self):
+        extraction = extract(Message(
+            "https://example.test/dovecot", "Security Advisory",
+            body="Vendor: Dovecot\nA buffer overflow vulnerability was discovered.",
+        ))
+
+        self.assertEqual(extraction.vendor_hint, "Dovecot")
+        self.assertEqual(extraction.product_hint, "Dovecot")
+
     def test_invalid_placeholder_link_does_not_reject_message(self):
         source = "https://seclists.org/fulldisclosure/2026/Jul/9"
         message = parse_message(
