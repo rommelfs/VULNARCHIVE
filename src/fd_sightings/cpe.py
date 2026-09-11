@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from .store import Store
 
 
+PLACEHOLDERS = {"", "unknown", "n/a"}
+
+
 def _identity(value: object) -> str:
     """Normalize display and CPE tokens for conservative identity comparison."""
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
@@ -26,7 +29,7 @@ def _identifier_namespace(value: object) -> bool:
 
 @dataclass(slots=True)
 class CPERegistry:
-    """Resolve extracted product names against the GCVE CPE OpenAPI service."""
+    """Validate extracted product/vendor names against the GCVE CPE registry."""
 
     client: Client
     base_url: str = "https://cpe.gcve.eu"
@@ -150,7 +153,7 @@ class CPERegistry:
         return extraction
 
     def enrich_store(self, store: Store, *, limit: int = 0) -> dict[str, int]:
-        """Backfill all eligible stored observations and return run counters."""
+        """Validate eligible stored observations and return run counters."""
         candidates = store.cpe_enrichment_candidates(limit)
         allowed = {item.name for item in fields(Extraction)}
         enriched = 0
