@@ -170,6 +170,7 @@ class CPERegistry:
                     publications_updated += store.update_published_affected(
                         str(row["source_url"]), vendor=extraction.vendor_hint,
                         product=extraction.product_hint,
+                        previous_product=str(before.get("product_hint") or ""),
                     )
                 enriched += 1
         return {
