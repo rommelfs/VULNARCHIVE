@@ -459,6 +459,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 page=int(one("page", "1")), per_page=int(one("per_page", "50")),
                 sort=one("sort", "published"), order=one("order", "desc"),
                 search=one("q").strip(), status=one("match"), review_state=one("review"),
+                source_id=one("source_id"),
                 confidence_min=float(one("confidence_min", "0")),
                 confidence_max=float(one("confidence_max", "1")),
             )
@@ -476,16 +477,19 @@ class ReviewHandler(BaseHTTPRequestHandler):
             proposed = extraction.get("proposed_type", "seen")
             confidence = float(row["max_confidence"])
             href = "/observation?" + urllib.parse.urlencode({"source": row["source_url"]})
-            table_rows.append(f"""<tr><td><input type="hidden" name="page_source" value="{_e(row['source_url'])}"><input type="checkbox" name="source" value="{_e(row['source_url'])}" aria-label="Select {_e(row['title'])}"></td><td><a href="{_e(href)}"><strong>{_e(row['title'])}</strong></a><br><span class="muted">{_e(row['author'])} · {_e(row['published'])}</span><br>{tags}</td>
-<td>{_e(proposed)}</td><td>{confidence:.3f}</td><td class="{_e(row['review_state'])}">{_e(row['review_state'])}</td></tr>""")
+            source_adapter = SOURCES.get(row["source_id"])
+            table_rows.append(f"""<tr><td><input type="hidden" name="page_source" value="{_e(row['source_url'])}"><input type="checkbox" name="source" value="{_e(row['source_url'])}" aria-label="Select {_e(row['title'])}"></td><td><a href="{_e(href)}"><strong>{_e(row['title'])}</strong></a><br><span class="muted">{_e(row['author'])}</span><br>{tags}</td>
+<td>{_e(row['published'])}</td><td>{_e(source_adapter.name if source_adapter else row['source_id'])}</td><td>{_e(proposed)}</td><td>{confidence:.3f}</td><td class="{_e(row['review_state'])}">{_e(row['review_state'])}</td></tr>""")
         def sort_link(field: str, label: str) -> str:
             order = "asc" if request.sort != field or request.order == "desc" else "desc"
             query = {"q": request.search, "review": request.review_state, "match": request.status,
+                     "source_id": request.source_id,
                      "confidence_min": request.confidence_min,
                      "confidence_max": request.confidence_max, "per_page": request.per_page,
                      "sort": field, "order": order}
             return f'<a href="/?{_e(urllib.parse.urlencode(query))}">{_e(label)}</a>'
         common = {"q": request.search, "review": request.review_state, "match": request.status,
+                  "source_id": request.source_id,
                   "confidence_min": request.confidence_min,
                   "confidence_max": request.confidence_max, "per_page": request.per_page,
                   "sort": request.sort, "order": request.order}
@@ -500,6 +504,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <form class="toolbar" method="get" role="search" style="margin-top:16px"><input type="search" name="q" maxlength="200" value="{_e(request.search)}" placeholder="Search title, author, body, CVE or CWE">
 <select name="review"><option value="">All review states</option>{self._options(('pending','approved','rejected'), request.review_state)}</select>
 <select name="match"><option value="">All match states</option>{self._options(('matched','unmatched'), request.status)}</select>
+<select name="source_id" aria-label="Source"><option value="">All sources</option>{self._source_options(request.source_id)}</select>
 <div class="range-filter" role="group" aria-label="Confidence range">
 <label for="confidence-min">Confidence min: <output id="confidence-min-value" for="confidence-min">{_e(f'{request.confidence_min:.2f}')}</output></label><input id="confidence-min" data-range-output="confidence-min-value" type="range" name="confidence_min" min="0" max="1" step="0.01" value="{_e(request.confidence_min)}">
 <label for="confidence-max">Confidence max: <output id="confidence-max-value" for="confidence-max">{_e(f'{request.confidence_max:.2f}')}</output></label><input id="confidence-max" data-range-output="confidence-max-value" type="range" name="confidence_max" min="0" max="1" step="0.01" value="{_e(request.confidence_max)}"></div>
@@ -507,8 +512,15 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <form method="post" action="/bulk-review"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
 <div class="panel"><div class="toolbar"><strong>Bulk review:</strong><button name="action" value="approve">Approve selected</button><button name="action" value="approve-page">Approve all shown ({len(rows)})</button><button class="danger" name="action" value="reject">Reject selected</button><button class="secondary" name="action" value="reset">Reset selected</button></div>
 <p class="muted">Approval retains all candidate vulnerability IDs on each selected row and uses its proposed Sighting type. At most 100 rows can be changed in one request.</p>
-<table><thead><tr><th>Select</th><th>{sort_link('title', 'Observation')}</th><th>Proposal</th><th>{sort_link('confidence', 'Confidence')}</th><th>{sort_link('review', 'Review')}</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="5">No observations.</td></tr>'}</tbody></table><nav class="toolbar" aria-label="Pagination">{' '.join(pagination)}</nav></div></form>"""
+<table><thead><tr><th>Select</th><th>{sort_link('title', 'Observation')}</th><th>{sort_link('published', 'Date')}</th><th>Source</th><th>Proposal</th><th>{sort_link('confidence', 'Confidence')}</th><th>{sort_link('review', 'Review')}</th></tr></thead><tbody>{''.join(table_rows) or '<tr><td colspan="7">No observations.</td></tr>'}</tbody></table><nav class="toolbar" aria-label="Pagination">{' '.join(pagination)}</nav></div></form>"""
         self._send(_layout("Review queue", content))
+
+    @staticmethod
+    def _source_options(selected: str) -> str:
+        return "".join(
+            f'<option value="{_e(source_id)}" {"selected" if source_id == selected else ""}>{_e(adapter.name)}</option>'
+            for source_id, adapter in SOURCES.items()
+        )
 
     @staticmethod
     def _options(values: tuple[str, ...], selected: str) -> str:

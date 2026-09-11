@@ -5,6 +5,7 @@ import math
 
 
 OBSERVATION_SORTS = frozenset({"published", "title", "author", "status", "review", "confidence"})
+OBSERVATION_SOURCES = frozenset({"full-disclosure", "bugtraq", "bugtraq-ai"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class ListQuery:
     search: str = ""
     status: str = ""
     review_state: str = ""
+    source_id: str = ""
     confidence_min: float = 0.0
     confidence_max: float = 1.0
 
@@ -36,6 +38,8 @@ class ListQuery:
             raise ValueError("match is not supported")
         if self.review_state not in {"", "pending", "approved", "rejected"}:
             raise ValueError("review is not supported")
+        if self.source_id not in {"", *OBSERVATION_SOURCES}:
+            raise ValueError("source is not supported")
         if not math.isfinite(self.confidence_min) or not math.isfinite(self.confidence_max):
             raise ValueError("confidence bounds must be finite")
         if not 0 <= self.confidence_min <= self.confidence_max <= 1:

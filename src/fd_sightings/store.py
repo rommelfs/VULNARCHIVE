@@ -921,6 +921,9 @@ class Store:
         if request.review_state:
             clauses.append("o.review_state = ?")
             params.append(request.review_state)
+        if request.source_id:
+            clauses.append("o.source_id = ?")
+            params.append(request.source_id)
         if request.confidence_min > 0:
             clauses.append(f"{confidence} >= ?")
             params.append(request.confidence_min)
