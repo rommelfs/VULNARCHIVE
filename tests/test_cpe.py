@@ -214,12 +214,13 @@ class CPERegistryTests(unittest.TestCase):
                 )
                 updated = store.update_published_affected(
                     "source", vendor="Acme", product="Mail Gateway",
+                    previous_product="CVE-2026-52307",
                 )
                 self.assertEqual(updated, 1)
                 affected = store.gcve_record("GCVE-1988-2026-0314")["containers"]["cna"]["affected"]
                 self.assertEqual(affected, [{"vendor": "Acme", "product": "Mail Gateway"}])
-                # Migration-era callers supplied this keyword. It remains
-                # accepted, but is no longer required.
+                # Repeating the correction with the same stale-product context
+                # is idempotent.
                 self.assertEqual(store.update_published_affected(
                     "source", vendor="Acme", product="Mail Gateway",
                     previous_product="CVE-2026-52307",
@@ -247,6 +248,7 @@ class CPERegistryTests(unittest.TestCase):
                 )
                 updated = store.update_published_affected(
                     "source", vendor="Apple", product="Safari",
+                    previous_product="APPLE-SA-08-18-2026-1 Safari",
                 )
                 self.assertEqual(updated, 1)
                 affected = store.gcve_record("GCVE-1988-2026-0315")["containers"]["cna"]["affected"]
