@@ -98,7 +98,7 @@ def make_parser() -> argparse.ArgumentParser:
     publication_export = sub.add_parser("export-publications", help="Export the automatic publication ledger as JSON Lines")
     publication_export.add_argument("--output", default="-")
     enrich_cpe = sub.add_parser(
-        "enrich-cpe", help="Backfill missing vendors in stored observations from the GCVE CPE registry",
+        "enrich-cpe", help="Validate stored product/vendor names with the GCVE CPE registry",
     )
     enrich_cpe.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
     evaluate = sub.add_parser("evaluate", help="Evaluate deterministic matching against labelled JSON fixtures")

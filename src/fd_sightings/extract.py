@@ -69,6 +69,13 @@ def _unique(pattern: re.Pattern[str], text: str) -> list[str]:
 
 def product_hint(title: str) -> str:
     cleaned = PREFIX.sub("", title).strip()
+    # SEC Consult titles start with the advisory publisher, not the affected
+    # vendor/product ("SEC Consult SA-... :: ... in Kiuwan").
+    sec_consult = re.match(
+        r"^SEC\s+Consult\s+SA-\d{8}-\d+\s*::.*\bin\s+(.+)$", cleaned, re.IGNORECASE,
+    )
+    if sec_consult:
+        cleaned = sec_consult.group(1).strip()
     tokens = cleaned.split()
     if tokens and IDENTIFIER_ONLY_RE.match(tokens[0].strip("()[],:;")):
         # An identifier-only title prefix says nothing about the product.  A

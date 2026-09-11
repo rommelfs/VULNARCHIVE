@@ -71,6 +71,35 @@ class CPERegistryTests(unittest.TestCase):
         self.assertIs(CPERegistry(Client()).enrich(missing), missing)
         self.assertEqual(missing.vendor_hint, "")
 
+    def test_exact_product_corrects_a_finder_mistaken_for_vendor(self):
+        class Client:
+            def get_json(self, url, params=None):
+                return {"items": [{
+                    "uuid": "kiuwan-product", "vendor_uuid": "kiuwan-vendor",
+                    "name": "kiuwan", "title": "Kiuwan",
+                    "vendor_name": "kiuwan", "vendor_title": "Kiuwan",
+                }]}
+
+        extraction = Extraction(product_hint="Kiuwan", vendor_hint="SEC Consult")
+        CPERegistry(Client()).enrich(extraction)
+
+        self.assertEqual(extraction.product_hint, "Kiuwan")
+        self.assertEqual(extraction.vendor_hint, "Kiuwan")
+        self.assertEqual(extraction.cpe_product_uuid, "kiuwan-product")
+
+    def test_product_name_is_used_as_vendor_only_after_exact_vendor_match(self):
+        class Client:
+            def get_json(self, url, params=None):
+                if url.endswith("/api/products/suggest"):
+                    return {"items": []}
+                return {"items": [{"uuid": "mongo-vendor", "name": "mongodb", "title": "MongoDB"}]}
+
+        extraction = Extraction(product_hint="MongoDB")
+        CPERegistry(Client()).enrich(extraction)
+
+        self.assertEqual(extraction.vendor_hint, "MongoDB")
+        self.assertEqual(extraction.cpe_vendor_uuid, "mongo-vendor")
+
     def test_identifier_is_never_looked_up_as_a_product(self):
         class Client:
             def get_json(self, url, params=None):
@@ -84,6 +113,12 @@ class CPERegistryTests(unittest.TestCase):
         class Client:
             def get_json(self, url, params=None):
                 if url.endswith("/api/products/suggest"):
+                    if params["q"] == "macos":
+                        return {"items": [{
+                            "uuid": "macos-uuid", "vendor_uuid": "apple-uuid",
+                            "name": "macos", "title": "macOS", "vendor_name": "apple",
+                            "vendor_title": "Apple",
+                        }]}
                     return {"items": []}
                 self.vendor_request = (url, params)
                 return {"items": [{
@@ -94,14 +129,14 @@ class CPERegistryTests(unittest.TestCase):
         extraction = CPERegistry(client).enrich(Extraction(product_hint="Apple macOS"))
 
         self.assertEqual(extraction.vendor_hint, "Apple")
-        self.assertEqual(extraction.product_hint, "Apple macOS")
+        self.assertEqual(extraction.product_hint, "macOS")
         self.assertEqual(extraction.cpe_vendor_uuid, "apple-uuid")
-        self.assertEqual(extraction.cpe_product_uuid, "")
+        self.assertEqual(extraction.cpe_product_uuid, "macos-uuid")
         self.assertEqual(client.vendor_request, (
             "https://cpe.gcve.eu/api/vendors/suggest", {"q": "apple", "limit": "20"},
         ))
 
-    def test_mass_enrichment_updates_only_missing_vendors(self):
+    def test_mass_enrichment_validates_existing_vendors_too(self):
         class Client:
             def get_json(self, url, params=None):
                 product = params["q"]
@@ -121,11 +156,11 @@ class CPERegistryTests(unittest.TestCase):
                 result = CPERegistry(Client()).enrich_store(store)
 
                 self.assertEqual(result, {
-                    "candidates": 1, "enriched": 1, "unchanged": 0,
+                    "candidates": 2, "enriched": 2, "unchanged": 0,
                     "publications_updated": 0,
                 })
                 self.assertEqual(store.get("missing")["extraction"]["vendor_hint"], "canonical_vendor")
-                self.assertEqual(store.get("known")["extraction"]["vendor_hint"], "Existing Vendor")
+                self.assertEqual(store.get("known")["extraction"]["vendor_hint"], "canonical_vendor")
             finally:
                 store.close()
 
@@ -133,6 +168,12 @@ class CPERegistryTests(unittest.TestCase):
         class Client:
             def get_json(self, url, params=None):
                 if url.endswith("/api/products/suggest"):
+                    if params["q"] == "macos":
+                        return {"items": [{
+                            "uuid": "macos-uuid", "vendor_uuid": "apple-uuid",
+                            "name": "macos", "title": "macOS", "vendor_name": "apple",
+                            "vendor_title": "Apple",
+                        }]}
                     return {"items": []}
                 return {"items": [{"uuid": "apple-uuid", "name": "apple", "title": "Apple"}]}
 
@@ -140,7 +181,10 @@ class CPERegistryTests(unittest.TestCase):
             "cveMetadata": {"vulnId": "GCVE-1988-2026-0291", "dateUpdated": "2026-01-01T00:00:00Z"},
             "containers": {"cna": {
                 "providerMetadata": {"dateUpdated": "2026-01-01T00:00:00Z"},
-                "affected": [{"vendor": "unknown", "product": "Apple macOS"}],
+                "affected": [
+                    {"vendor": "unknown", "product": "Apple macOS"},
+                    {"vendor": "Other", "product": "Unrelated"},
+                ],
             }},
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -158,6 +202,8 @@ class CPERegistryTests(unittest.TestCase):
                 published = store.gcve_record("GCVE-1988-2026-0291")
                 affected = published["containers"]["cna"]["affected"]
                 self.assertEqual(affected[0]["vendor"], "Apple")
+                self.assertEqual(affected[0]["product"], "macOS")
+                self.assertEqual(affected[1], {"vendor": "Other", "product": "Unrelated"})
                 self.assertNotEqual(
                     published["cveMetadata"]["dateUpdated"], "2026-01-01T00:00:00Z",
                 )
