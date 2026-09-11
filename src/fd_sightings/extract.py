@@ -20,6 +20,17 @@ VULN_TERMS = re.compile(
 
 VERSION_TOKEN = re.compile(r"^(?:v?\d+(?:\.\d+)+(?:[-._a-z0-9]*)?|through$|before$|after$|<=|>=)$", re.IGNORECASE)
 PREFIX = re.compile(r"^(?:re:\s*|fwd?:\s*|\[[^]]+\]\s*)+", re.IGNORECASE)
+IDENTIFIER_ONLY_RE = re.compile(
+    r"^(?:CVE-\d{4}-\d{4,}|GCVE-\d+-\d{4}-\d{4,}|"
+    r"GHSA-[23456789cfghjmpqrvwx]{4}(?:-[23456789cfghjmpqrvwx]{4}){2})$",
+    re.IGNORECASE,
+)
+ADVISORY_PREFIX_RE = re.compile(
+    r"^(?:(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}|"
+    r"(?:[A-Z][\w.&-]*(?:\s+[A-Z][\w.&-]*){0,3})\s+SA-\d{6,8}(?:-\d+)*)"
+    r"\s*(?::|-)?\s+",
+    re.IGNORECASE,
+)
 VERSION_CONTEXT_RE = re.compile(
     r"\b(?:versions?|v)\s*(?:before|through|up to|<=|<|affected:?)?\s*"
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)",
@@ -34,6 +45,16 @@ FIXED_VERSION_RE = re.compile(
     r"(v?\d+(?:\.\d+){1,3}(?:[-._a-z0-9]+)?)", re.IGNORECASE,
 )
 COMMIT_RE = re.compile(r"\b(?:commit|revision)\s+([0-9a-f]{7,40})\b", re.IGNORECASE)
+POC_LINK_RE = re.compile(
+    r"(?:(?:^|[/_.-])(?:poc|proof[-_ ]of[-_ ]concept|exploit)(?:$|[/_.-])|"
+    r"(?:github|gitlab)\.com/[^\s/]+/[^\s/]*(?:poc|exploit)|exploit-db\.com/exploits/)",
+    re.IGNORECASE,
+)
+EMBEDDED_POC_RE = re.compile(
+    r"(?m)^(?:\s{0,4}(?:\$|#)\s+)?(?:curl|wget)\s+(?:-[A-Za-z]+\s+)*https?://\S+|"
+    r"^#!\s*/usr/bin/(?:env\s+)?(?:python\d*|bash|sh|perl|ruby)\b",
+    re.IGNORECASE,
+)
 FIELD_RE = re.compile(r"(?im)^\s*(vendor|product|component|module|aliases?)\s*:\s*([^\r\n]+)")
 VULNERABILITY_TYPES = {
     "buffer-overflow": re.compile(r"\bbuffer overflow\b", re.IGNORECASE),
@@ -54,7 +75,14 @@ def _unique(pattern: re.Pattern[str], text: str) -> list[str]:
 
 def product_hint(title: str) -> str:
     cleaned = PREFIX.sub("", title).strip()
+    cleaned = ADVISORY_PREFIX_RE.sub("", cleaned).strip()
     tokens = cleaned.split()
+    if tokens and IDENTIFIER_ONLY_RE.match(tokens[0].strip("()[],:;")):
+        # An identifier-only title prefix says nothing about the product.  A
+        # resolved explicit record can provide an unambiguous affected product
+        # later; treating the identifier as a product creates records such as
+        # vendor=CVE, product=CVE-2026-....
+        return ""
     selected: list[str] = []
     stopwords = {"authenticated", "unauthenticated", "remote", "local", "multiple", "stored"}
     for token in tokens[:8]:
@@ -77,6 +105,9 @@ def extract(message: Message) -> Extraction:
     for name, value in FIELD_RE.findall(text):
         fields.setdefault(name.casefold(), []).append(value.strip()[:200])
     explicit_product = (fields.get("product") or [""])[0]
+    explicit_product = ADVISORY_PREFIX_RE.sub("", explicit_product).strip()
+    if IDENTIFIER_ONLY_RE.match(explicit_product):
+        explicit_product = ""
     aliases = fields.get("alias", []) + fields.get("aliases", [])
     constraints = [
         {"operator": match.group(1).casefold(), "version": match.group(2)}
@@ -86,17 +117,24 @@ def extract(message: Message) -> Extraction:
     affected_versions = {
         match.group(1) for match in VERSION_CONTEXT_RE.finditer(text)
     } - fixed_versions
+    poc_links = sorted({link for link in message.links if POC_LINK_RE.search(link)})
 
     if re.search(r"\b(proof[- ]of[- ]concept|PoC)\b", text, re.IGNORECASE):
         evidence.append("explicit PoC wording")
-        score += 2
+        # BCP-12 defines publication of a PoC as its own sighting type.  An
+        # explicit label is sufficient evidence; the additional indicators
+        # below remain useful for less clearly labelled reports.
+        score += 3
     if re.search(r"(?:^|\n)(?:GET|POST|PUT|PATCH|DELETE)\s+/\S+\s+HTTP/", text):
-        evidence.append("HTTP request")
-        score += 2
+        evidence.append("embedded HTTP request")
+        score += 3
+    if EMBEDDED_POC_RE.search(message.body):
+        evidence.append("embedded executable example")
+        score += 3
     if re.search(r"\b(payload|exploit code|reproduction steps|steps to reproduce)\b", text, re.IGNORECASE):
         evidence.append("payload or reproduction steps")
         score += 1
-    if re.search(r"github\.com/[^\s]+/(?:exploit|poc|0day)", text, re.IGNORECASE):
+    if poc_links:
         evidence.append("public exploit repository")
         score += 1
     if re.search(r"(?:marker_exists=yes|arbitrary code execution|code execution (?:was|is) confirmed)", text, re.IGNORECASE):
@@ -120,5 +158,6 @@ def extract(message: Message) -> Extraction:
         vulnerability_types=sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(text)),
         poc_score=score,
         poc_evidence=evidence,
+        poc_links=poc_links,
         relevant=bool(VULN_TERMS.search(text)),
     )

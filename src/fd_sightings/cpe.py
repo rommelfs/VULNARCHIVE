@@ -20,12 +20,59 @@ def _words(value: object) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
 
 
+def _identifier_namespace(value: object) -> bool:
+    return bool(re.fullmatch(r"(?:cve|gcve|ghsa)(?:[-_ ].*)?", str(value or ""), re.IGNORECASE))
+
+
 @dataclass(slots=True)
 class CPERegistry:
     """Resolve extracted product names against the GCVE CPE OpenAPI service."""
 
     client: Client
     base_url: str = "https://cpe.gcve.eu"
+
+    def _suggest(self, kind: str, query: str) -> list[dict[str, object]]:
+        """Return suggestion dictionaries, degrading registry errors to no match.
+
+        Keeping all endpoint access in this method also makes the helper-based
+        product/vendor resolver safe: `_product` must never depend on a method
+        that is only conditionally defined by a previous refactor.
+        """
+        try:
+            payload = self.client.get_json(
+                f"{self.base_url.rstrip('/')}/api/{kind}/suggest",
+                {"q": query, "limit": "20"},
+            )
+        except (HTTPError, OSError, RuntimeError, ValueError):
+            return []
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        return [item for item in items if isinstance(item, dict)]
+
+    @staticmethod
+    def _exact(items: list[dict[str, object]], value: str) -> list[dict[str, object]]:
+        wanted = _identity(value)
+        return [
+            item for item in items
+            if wanted and wanted in {_identity(item.get("name")), _identity(item.get("title"))}
+        ]
+
+    def _product(self, name: str, vendor: str = "") -> dict[str, object] | None:
+        """Resolve one exact and unambiguous product suggestion."""
+        matches = [item for item in self._exact(self._suggest("products", name), name)
+                   if item.get("vendor_name")]
+        if vendor:
+            wanted_vendor = _identity(vendor)
+            matches = [
+                item for item in matches
+                if wanted_vendor in {
+                    _identity(item.get("vendor_name")), _identity(item.get("vendor_title")),
+                }
+            ]
+        identities = {
+            (str(item.get("uuid") or ""), str(item.get("vendor_uuid") or ""))
+            for item in matches
+        }
+        return matches[0] if matches and len(identities) == 1 else None
 
     def enrich(self, extraction: Extraction) -> Extraction:
         """Fill a missing vendor only when one unambiguous product is found.
@@ -35,34 +82,15 @@ class CPERegistry:
         normalized name/title match and a unique product/vendor identity.
         Registry availability must never prevent preservation of a message.
         """
-        if extraction.vendor_hint or not extraction.product_hint or not self.base_url:
+        if (extraction.vendor_hint or not extraction.product_hint or not self.base_url
+                or _identifier_namespace(extraction.product_hint)):
             return extraction
-        try:
-            payload = self.client.get_json(
-                f"{self.base_url.rstrip('/')}/api/products/suggest",
-                {"q": extraction.product_hint, "limit": "20"},
-            )
-        except (HTTPError, OSError, RuntimeError, ValueError):
-            return extraction
-        items = payload.get("items", []) if isinstance(payload, dict) else []
-        wanted = _identity(extraction.product_hint)
-        matches = [
-            item for item in items
-            if isinstance(item, dict)
-            and wanted
-            and wanted in {_identity(item.get("name")), _identity(item.get("title"))}
-            and item.get("vendor_name")
-        ]
-        identities = {
-            (str(item.get("uuid") or ""), str(item.get("vendor_uuid") or ""))
-            for item in matches
-        }
-        if len(identities) > 1:
-            return extraction
-        if matches:
-            match = matches[0]
+        if match := self._product(extraction.product_hint):
+            vendor = str(match.get("vendor_title") or match["vendor_name"])
+            if _identifier_namespace(vendor):
+                return extraction
             extraction.product_hint = str(match.get("title") or match.get("name"))
-            extraction.vendor_hint = str(match.get("vendor_title") or match["vendor_name"])
+            extraction.vendor_hint = vendor
             extraction.cpe_product_uuid = str(match.get("uuid") or "")
             extraction.cpe_vendor_uuid = str(match.get("vendor_uuid") or "")
             return extraction
@@ -74,14 +102,7 @@ class CPERegistry:
         product_words = _words(extraction.product_hint)
         if not product_words:
             return extraction
-        try:
-            payload = self.client.get_json(
-                f"{self.base_url.rstrip('/')}/api/vendors/suggest",
-                {"q": product_words[0], "limit": "20"},
-            )
-        except (HTTPError, OSError, RuntimeError, ValueError):
-            return extraction
-        items = payload.get("items", []) if isinstance(payload, dict) else []
+        items = self._suggest("vendors", product_words[0])
         prefixes: list[tuple[int, dict[str, object]]] = []
         for item in items:
             if not isinstance(item, dict):
@@ -100,7 +121,10 @@ class CPERegistry:
         if len(identities) != 1:
             return extraction
         match = matches[0]
-        extraction.vendor_hint = str(match.get("title") or match.get("name"))
+        vendor = str(match.get("title") or match.get("name"))
+        if _identifier_namespace(vendor):
+            return extraction
+        extraction.vendor_hint = vendor
         extraction.cpe_vendor_uuid = str(match.get("uuid") or "")
         return extraction
 

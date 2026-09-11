@@ -91,9 +91,20 @@ degrade to the deterministic result and do not fail the mailing-list import.
 
 LLM comparison requires candidates. Configure `VL_URL` to a complete
 Vulnerability-Lookup deployment that supports product search; the restricted
-VULNARCHIVE public endpoint cannot be used as its own candidate source. Import
-summaries expose `match_methods`, `llm_evaluated`, and `llm_errors`, so a zero
-LLM count is distinguishable from a successful no-match decision.
+VULNARCHIVE public endpoint cannot be used as its own candidate source.
+
+Import summaries distinguish observations from candidate matches: `matched` is
+the number of observations with at least one candidate, while `match_candidates`
+and `match_methods` count individual candidates. Consequently, the method counts
+can legitimately add up to more than `matched`.
+
+The LLM counters are observation-based rather than candidate-based:
+`llm_evaluated` counts attempted comparisons, `llm_succeeded` counts completed
+comparisons, and `llm_errors` counts observations whose comparison failed.
+`llm_error_types` groups the exception classes. An LLM failure degrades to the
+deterministic candidates, so it does not increment the top-level import
+`failed` counter. For example, `llm_evaluated: 10`, `llm_succeeded: 0`, and
+`llm_errors: 10` means all ten attempted comparisons failed but import continued.
 
 ## Implemented decision pipeline
 
