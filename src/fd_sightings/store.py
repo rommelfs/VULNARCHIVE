@@ -742,7 +742,7 @@ class Store:
         )
 
     def update_published_affected(
-        self, source_url: str, *, vendor: str, product: str = "",
+        self, source_url: str, vendor: str = "", product: str = "",
         previous_product: str = "",
     ) -> int:
         """Correct placeholder or identifier-like affected metadata.

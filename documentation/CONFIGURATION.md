@@ -360,6 +360,55 @@ If a refreshed observation is newly classified as
 a `seen` sighting for the same vulnerability was published previously; the two
 sighting types have separate idempotency keys.
 
+## Re-analyzing stored observations
+
+`enrich-cpe` only fills missing vendors; it does not run the extraction rules
+again. After changing vendor or PoC detection, re-import the applicable source
+range with the global `--refresh` option (global options must precede the
+subcommand):
+
+```bash
+# One observation
+fd-sightings --refresh url https://seclists.org/fulldisclosure/2024/Jan/1
+
+# A complete historical range
+fd-sightings --refresh archive --source full-disclosure \
+  --from-period 2024-01 --to-period 2024-12
+
+# Current feed entries
+fd-sightings --refresh rss --source full-disclosure
+```
+
+To re-analyze every observation already present in the database without
+specifying archive periods, run:
+
+```bash
+fd-sightings rescan
+```
+
+Use repeated `--source` options to restrict sources, or `--limit N` for a pilot.
+The rescan corrects locally published `affected` values when their old vendor or
+product is a placeholder or a vulnerability identifier. It never replaces an
+existing non-placeholder product or vendor. PoC sightings are still only
+submitted by the separate `plan-auto`/`publish-auto` step below.
+
+A refresh downloads the source again, reruns product/vendor and PoC extraction,
+reruns vulnerability matching, and records a `reprocess` analysis event. A newly
+found vendor also corrects related, locally published GCVE records where the
+vendor is still a placeholder. It does not overwrite analyst review decisions.
+
+Inspect the resulting publication changes before submitting them:
+
+```bash
+fd-sightings plan-auto
+fd-sightings publish-auto --retry-failed
+```
+
+If a refreshed observation is newly classified as
+`published-proof-of-concept`, publication creates that BCP-12 sighting even if
+a `seen` sighting for the same vulnerability was published previously; the two
+sighting types have separate idempotency keys.
+
 ## Sources
 
 | Variable | Example | Purpose |
