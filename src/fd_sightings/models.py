@@ -41,6 +41,7 @@ class Extraction:
     vulnerability_types: list[str] = field(default_factory=list)
     poc_score: int = 0
     poc_evidence: list[str] = field(default_factory=list)
+    poc_links: list[str] = field(default_factory=list)
     relevant: bool = False
 
     @property

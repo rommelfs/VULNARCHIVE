@@ -738,6 +738,12 @@ class Store:
 
     def update_published_vendor(self, source_url: str, vendor: str) -> int:
         """Publish a vendor correction for local GCVE records from an observation."""
+        return self.update_published_affected(source_url, vendor=vendor)
+
+    def update_published_affected(
+        self, source_url: str, *, vendor: str = "", product: str = "",
+    ) -> int:
+        """Correct placeholder or identifier-like affected metadata."""
         keys = self.db.execute(
             """SELECT publication_key FROM automatic_publications
             WHERE source_url=? AND kind='gcve' AND status='published'""",
@@ -755,9 +761,24 @@ class Store:
             if not isinstance(affected, list):
                 continue
             changed = False
-            for product in affected:
-                if isinstance(product, dict) and str(product.get("vendor") or "").casefold() in {"", "unknown"}:
-                    product["vendor"] = vendor
+            for affected_product in affected:
+                if not isinstance(affected_product, dict):
+                    continue
+                old_vendor = str(affected_product.get("vendor") or "").strip()
+                old_product = str(affected_product.get("product") or "").strip()
+                invalid_vendor = old_vendor.casefold() in {"", "unknown", "n/a", "cve", "gcve", "ghsa"}
+                invalid_product = old_product.casefold() in {"", "unknown", "n/a"} or bool(
+                    re.fullmatch(r"(?:CVE-\d{4}-\d{4,}|GCVE-\d+-\d{4}-\d{4,}|GHSA-[\w-]+)", old_product, re.IGNORECASE)
+                    or re.match(
+                        r"(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}\s+(?=\S)",
+                        old_product, re.IGNORECASE,
+                    )
+                )
+                if vendor and invalid_vendor:
+                    affected_product["vendor"] = vendor
+                    changed = True
+                if product and invalid_product:
+                    affected_product["product"] = product
                     changed = True
             if not changed:
                 continue
