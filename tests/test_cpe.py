@@ -155,6 +155,12 @@ class CPERegistryTests(unittest.TestCase):
         class Client:
             def get_json(self, url, params=None):
                 if url.endswith("/api/products/suggest"):
+                    if params["q"] == "macos":
+                        return {"items": [{
+                            "uuid": "macos-uuid", "vendor_uuid": "apple-uuid",
+                            "name": "macos", "title": "macOS", "vendor_name": "apple",
+                            "vendor_title": "Apple",
+                        }]}
                     return {"items": []}
                 return {"items": [{"uuid": "apple-uuid", "name": "apple", "title": "Apple"}]}
 
@@ -162,7 +168,10 @@ class CPERegistryTests(unittest.TestCase):
             "cveMetadata": {"vulnId": "GCVE-1988-2026-0291", "dateUpdated": "2026-01-01T00:00:00Z"},
             "containers": {"cna": {
                 "providerMetadata": {"dateUpdated": "2026-01-01T00:00:00Z"},
-                "affected": [{"vendor": "unknown", "product": "Apple macOS"}],
+                "affected": [
+                    {"vendor": "unknown", "product": "Apple macOS"},
+                    {"vendor": "Other", "product": "Unrelated"},
+                ],
             }},
         }
         with tempfile.TemporaryDirectory() as directory:
