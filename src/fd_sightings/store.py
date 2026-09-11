@@ -712,11 +712,10 @@ class Store:
         return [self._decode(row) for row in self.db.execute(query, tuple(params))]
 
     def cpe_enrichment_candidates(self, limit: int = 0) -> list[dict[str, object]]:
-        """Return stored observations that have a product but no known vendor."""
+        """Return observations whose product/vendor pair can be canonicalized."""
         self.db.row_factory = sqlite3.Row
         query = """SELECT * FROM observations
             WHERE COALESCE(json_extract(extraction_json, '$.product_hint'), '') <> ''
-              AND COALESCE(json_extract(extraction_json, '$.vendor_hint'), '') = ''
             ORDER BY published DESC, source_url DESC"""
         params: tuple[int, ...] = ()
         if limit > 0:
@@ -738,6 +737,18 @@ class Store:
 
     def update_published_vendor(self, source_url: str, vendor: str) -> int:
         """Publish a vendor correction for local GCVE records from an observation."""
+        return self.update_published_affected(source_url, vendor=vendor)
+
+    def update_published_affected(
+        self, source_url: str, *, vendor: str, product: str = "",
+        previous_product: str | None = None,
+    ) -> int:
+        """Correct placeholder or identifier-like affected metadata.
+
+        ``previous_product`` is optional so repair callers do not need a stale
+        extraction value merely to replace values that are invalid on their
+        face.  When supplied, it also permits correcting that exact old value.
+        """
         keys = self.db.execute(
             """SELECT publication_key FROM automatic_publications
             WHERE source_url=? AND kind='gcve' AND status='published'""",
@@ -755,9 +766,28 @@ class Store:
             if not isinstance(affected, list):
                 continue
             changed = False
-            for product in affected:
-                if isinstance(product, dict) and str(product.get("vendor") or "").casefold() in {"", "unknown"}:
-                    product["vendor"] = vendor
+            for affected_product in affected:
+                if not isinstance(affected_product, dict):
+                    continue
+                old_vendor = str(affected_product.get("vendor") or "").strip()
+                old_product = str(affected_product.get("product") or "").strip()
+                invalid_vendor = old_vendor.casefold() in {"", "unknown", "n/a", "cve", "gcve", "ghsa"}
+                invalid_product = old_product.casefold() in {"", "unknown", "n/a"} or bool(
+                    re.fullmatch(r"(?:CVE-\d{4}-\d{4,}|GCVE-\d+-\d{4}-\d{4,}|GHSA-[\w-]+)", old_product, re.IGNORECASE)
+                    or re.match(
+                        r"(?:[A-Z][A-Z0-9._]*)-SA-\d{1,4}(?:-\d{1,4}){2,4}\s+(?=\S)",
+                        old_product, re.IGNORECASE,
+                    )
+                )
+                invalid_product = invalid_product or bool(
+                    previous_product is not None
+                    and old_product.casefold() == previous_product.casefold()
+                )
+                if vendor and invalid_vendor:
+                    affected_product["vendor"] = vendor
+                    changed = True
+                if product and invalid_product:
+                    affected_product["product"] = product
                     changed = True
             if not changed:
                 continue
