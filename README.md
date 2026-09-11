@@ -1,5 +1,13 @@
 # VULNARCHIVE
 
+## Online resources
+
+- Explore the online VULNARCHIVE implementation at
+  [vuln.freearchive.org](https://vuln.freearchive.org/).
+- Browse the
+  [most recent GNA 1988 vulnerabilities](https://vulnerability.circl.lu/recent?source=gna-1988)
+  available in the GCVE ecosystem.
+
 VULNARCHIVE is a provenance-preserving archive and vulnerability-publication
 pipeline for historic security mailing lists. It imports messages, extracts
 structured vulnerability facts, compares them with known CVEs, routes uncertain
