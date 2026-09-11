@@ -74,6 +74,10 @@ def make_parser() -> argparse.ArgumentParser:
     one = sub.add_parser("url", help="Process one archive message")
     one.add_argument("url")
 
+    rescan = sub.add_parser("rescan", help="Re-analyze every stored observation")
+    rescan.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
+    rescan.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
+
     export = sub.add_parser("export", help="Export review data as JSON Lines")
     export.add_argument("--status", choices=["matched", "unmatched"])
     export.add_argument("--output", default="-")
@@ -130,8 +134,24 @@ def _progress(index: int, total: int, url: str) -> None:
 def _summary(results: list[Result], vulnerability_lookup_url: str = "") -> dict[str, object]:
     matches = [match for result in results for match in result.matches]
     method_counts: dict[str, int] = {}
+    llm_error_types: dict[str, int] = {}
     for match in matches:
         method_counts[match.method] = method_counts.get(match.method, 0) + 1
+    llm_attempted = 0
+    llm_succeeded = 0
+    llm_failed = 0
+    for result in results:
+        evidence = {item for match in result.matches for item in match.evidence}
+        successful = any(item.startswith("llm-model:") for item in evidence)
+        errors = {item.removeprefix("llm-error:") for item in evidence if item.startswith("llm-error:")}
+        if successful or errors:
+            llm_attempted += 1
+        if successful:
+            llm_succeeded += 1
+        if errors:
+            llm_failed += 1
+            for error in errors:
+                llm_error_types[error] = llm_error_types.get(error, 0) + 1
     return {
         "total": len(results),
         "processed": sum(not result.skipped and not result.error for result in results),
@@ -139,9 +159,12 @@ def _summary(results: list[Result], vulnerability_lookup_url: str = "") -> dict[
         "failed": sum(bool(result.error) for result in results),
         "relevant": sum(result.extraction.relevant for result in results if not result.skipped),
         "matched": sum(bool(result.matches) for result in results),
+        "match_candidates": len(matches),
         "match_methods": method_counts,
-        "llm_evaluated": sum(any(item.startswith("llm-model:") for item in match.evidence) for match in matches),
-        "llm_errors": sum(any(item.startswith("llm-error:") for item in match.evidence) for match in matches),
+        "llm_evaluated": llm_attempted,
+        "llm_succeeded": llm_succeeded,
+        "llm_errors": llm_failed,
+        "llm_error_types": llm_error_types,
         "vulnerability_lookup_url": vulnerability_lookup_url,
         "poc": sum(result.extraction.proposed_type == "published-proof-of-concept" for result in results if not result.skipped),
         "errors": [
@@ -283,6 +306,24 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "url":
             results = _process(args, [args.url], store, source_client, lookup, cpe_registry=cpe_registry)
             print(json.dumps(_summary(results, args.vl_url), indent=2))
+        elif args.command == "rescan":
+            rows = store.rows()
+            selected = set(args.sources or SOURCES)
+            rows = [row for row in rows if str(row.get("source_id") or "full-disclosure") in selected]
+            if args.limit:
+                rows = rows[:args.limit]
+            aggregate = []
+            for adapter in adapters(sorted(selected)):
+                urls = [
+                    str(row["source_url"]) for row in rows
+                    if str(row.get("source_id") or "full-disclosure") == adapter.source_id
+                ]
+                aggregate.extend(process_urls(
+                    urls, source_client=source_client, lookup=lookup, store=store,
+                    semantic=not args.no_semantic, refresh=True, progress=_progress,
+                    adapter=adapter, cpe_registry=cpe_registry,
+                ))
+            print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         elif args.command == "archive":
             end = args.to_period or args.from_period
             aggregate: list[Result] = []
