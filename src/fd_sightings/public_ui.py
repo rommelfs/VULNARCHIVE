@@ -168,12 +168,33 @@ instances</a> regardless of identifier format.</p>
         source_rows = self.server.store.search_rows(search_query) if search_query else self.server.store.rows()
         dated_rows = [(row, _post_date(row.get("published"))) for row in source_rows]
         dated_rows.sort(key=lambda item: (item[1] or datetime.min.replace(tzinfo=timezone.utc), str(item[0]["source_url"])), reverse=True)
+        vulnerability_rows: list[tuple[dict[str, object], datetime]] = []
+        for record in self.server.store.published_gcve_records():
+            metadata = record.get("cveMetadata", {})
+            if not isinstance(metadata, dict):
+                continue
+            published = _post_date(metadata.get("datePublished"))
+            if not published:
+                continue
+            if search_query and search_query.casefold() not in json.dumps(record, ensure_ascii=False).casefold():
+                continue
+            vulnerability_rows.append((record, published))
+        vulnerability_rows.sort(
+            key=lambda item: (item[1], str(item[0].get("cveMetadata", {}).get("vulnId", ""))),
+            reverse=True,
+        )
         month_counts: dict[str, int] = {}
         for _, published in dated_rows:
             key = published.strftime("%Y-%m") if published else "unknown"
             month_counts[key] = month_counts.get(key, 0) + 1
+        for _, published in vulnerability_rows:
+            key = published.strftime("%Y-%m")
+            month_counts[key] = month_counts.get(key, 0) + 1
         if selected_month:
             dated_rows = [item for item in dated_rows if item[1] and item[1].strftime("%Y-%m") == selected_month]
+            vulnerability_rows = [
+                item for item in vulnerability_rows if item[1].strftime("%Y-%m") == selected_month
+            ]
 
         total = len(dated_rows)
         pages = max(1, math.ceil(total / per_page))
@@ -198,6 +219,18 @@ instances</a> regardless of identifier format.</p>
             sections += f'<section><h2>{html.escape(heading)}</h2><ul class="archive-list">{items}</ul></section>'
         if not sections:
             sections = '<p class="muted">No archived posts found.</p>'
+
+        vulnerability_items = "".join(
+            f'<li><time datetime="{published.date().isoformat()}">{published.date().isoformat()}</time>'
+            f'<span><a href="/vulnerability/{urllib.parse.quote(str(record.get("cveMetadata", {}).get("vulnId", "")))}">'
+            f'{html.escape(str(record.get("cveMetadata", {}).get("vulnId", "")))}</a>'
+            f'<br><small class="muted">{html.escape(str(record.get("containers", {}).get("cna", {}).get("title") or "Published vulnerability"))}</small></span></li>'
+            for record, published in vulnerability_rows
+        )
+        vulnerabilities = (
+            f'<section><h2>Published vulnerabilities</h2><ul class="archive-list">{vulnerability_items}</ul></section>'
+            if vulnerability_items else '<p class="muted">No vulnerabilities published in this period.</p>'
+        )
 
         search_suffix = "?" + urllib.parse.urlencode({"q": search_query}) if search_query else ""
         month_links = [f'<li><a href="/archive/{search_suffix}">All months</a></li>']
@@ -225,7 +258,7 @@ instances</a> regardless of identifier format.</p>
                    f'<input type="search" name="q" value="{html.escape(search_query, quote=True)}" maxlength="200" placeholder="Product, CVE, author or report text"></label> '
                    f'<button>Search</button></form>'
                    f'<nav aria-label="Archive months"><ul class="months">{"".join(month_links)}</ul></nav>'
-                   f'{sections}<nav aria-label="Pagination"><ul class="pagination">{"".join(pagination)}</ul></nav></div>')
+                   f'{vulnerabilities}{sections}<nav aria-label="Pagination"><ul class="pagination">{"".join(pagination)}</ul></nav></div>')
         self._send(_public_layout("Archive", content), "text/html; charset=utf-8")
 
     def _archive_detail(self, source: str) -> None:
