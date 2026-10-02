@@ -135,6 +135,30 @@ class PublicUITest(unittest.TestCase):
                 self.get("/archive/?" + query)
             self.assertEqual(400, raised.exception.code)
 
+    def test_archive_month_includes_vulnerabilities_by_publication_date(self) -> None:
+        record = {
+            "dataType": "CVE_RECORD", "dataVersion": "5.2",
+            "cveMetadata": {
+                "vulnId": "GCVE-1988-2026-0440", "state": "PUBLISHED",
+                "datePublished": "2026-10-02T04:57:00Z",
+            },
+            "containers": {"cna": {"title": "October vulnerability"}},
+        }
+        self.store.save_publication(
+            "october-source", "gcve:october", "gcve",
+            gcve_id="GCVE-1988-2026-0440", status="published", payload=record,
+        )
+
+        _, body, _ = self.get("/archive/?month=2026-10")
+        page = body.decode()
+        self.assertIn("Published vulnerabilities", page)
+        self.assertIn('href="/vulnerability/GCVE-1988-2026-0440"', page)
+        self.assertIn('<time datetime="2026-10-02">2026-10-02</time>', page)
+        self.assertIn("October vulnerability", page)
+
+        _, september_body, _ = self.get("/archive/?month=2026-09")
+        self.assertNotIn("GCVE-1988-2026-0440", september_body.decode())
+
     def test_archive_full_text_search_and_public_record_page(self) -> None:
         _, body, _ = self.get("/archive/?q=Archive+post+3")
         page = body.decode()
