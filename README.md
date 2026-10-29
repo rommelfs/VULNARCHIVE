@@ -184,6 +184,13 @@ post downloads are retained in the database and can be attempted again with
 a successful import removes its failure entry. Unknown source names fail
 validation instead of being ignored.
 
+Historical imports continue with later months and sources if an archive listing
+cannot be downloaded. The final JSON summary preserves successful message counts
+and reports listing failures separately in `failed_archives` and `archive_errors`;
+the command exits with status 1 when any listing failed. Re-run `archive` for the
+reported source and period after connectivity recovers. `retry-failed` retries
+individual post downloads, not archive listings.
+
 Historical HyperKitty month pages contain thread links rather than post links.
 The adapter expands each thread and its replies into stable `/message/<hash>/`
 permalinks and explicitly ignores the `/message/new` compose action.
