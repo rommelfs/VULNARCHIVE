@@ -1,6 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
-UPGRADE_SCRIPT_VERSION=4
+UPGRADE_SCRIPT_VERSION=5
 
 # Complete in-place production upgrade for the deployment documented in
 # DEPLOYMENT.md. Override paths through the environment for staging installs.
@@ -11,10 +11,11 @@ BACKUP_ROOT=${VULNARCHIVE_BACKUP_DIR:-/var/backups/vulnarchive}
 DB_FILE=${VULNARCHIVE_DB_FILE:-"$APP_DIR/data/fd-sightings.sqlite"}
 PYTHON=${PYTHON:-python3}
 PULL=1
+TARGET_REF=
 
 usage() {
     cat <<EOF
-Usage: sudo $0 [--no-pull]
+Usage: sudo $0 [--no-pull | --ref BRANCH_OR_COMMIT]
        $0 --version
 
 Updates VULNARCHIVE, runs its tests, backs up SQLite and configuration, installs
@@ -22,6 +23,7 @@ the package and systemd units, migrates the store, restarts previously active
 services, and checks the local public endpoint.
 
   --no-pull  install the currently checked-out revision without git pull
+  --ref REF  fetch REF from origin and fast-forward to it for this upgrade
   --version  print the upgrade-script version and exit
 
 Path overrides: VULNARCHIVE_APP_DIR, VULNARCHIVE_VENV_DIR,
@@ -29,13 +31,27 @@ VULNARCHIVE_ENV_FILE, VULNARCHIVE_BACKUP_DIR, VULNARCHIVE_DB_FILE, PYTHON.
 EOF
 }
 
-case ${1:-} in
-    "") ;;
-    --no-pull) PULL=0 ;;
-    --version) echo "VULNARCHIVE upgrade script $UPGRADE_SCRIPT_VERSION"; exit 0 ;;
-    -h|--help) usage; exit 0 ;;
-    *) usage >&2; exit 2 ;;
-esac
+while (( $# )); do
+    case $1 in
+        --no-pull) PULL=0; shift ;;
+        --ref)
+            [[ $# -ge 2 && -z $TARGET_REF && $2 != -* ]] || {
+                echo "error: --ref requires one branch or commit" >&2; exit 2;
+            }
+            TARGET_REF=$2
+            shift 2
+            ;;
+        --version) echo "VULNARCHIVE upgrade script $UPGRADE_SCRIPT_VERSION"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+done
+if [[ -n $TARGET_REF ]]; then
+    (( PULL )) || { echo "error: --ref and --no-pull cannot be combined" >&2; exit 2; }
+    git check-ref-format --branch "$TARGET_REF" >/dev/null || {
+        echo "error: invalid branch or commit: $TARGET_REF" >&2; exit 2;
+    }
+fi
 
 if [[ $EUID -ne 0 ]]; then
     echo "error: run this upgrade with sudo or as root" >&2
@@ -85,12 +101,26 @@ fi
 
 old_revision=$(git rev-parse HEAD)
 echo "==> Current revision: $old_revision"
-if (( PULL )); then
+if [[ -n $TARGET_REF ]]; then
+    echo "==> Fetching explicit upgrade target from origin: $TARGET_REF"
+    git fetch origin "$TARGET_REF"
+    target_revision=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
+    git merge-base --is-ancestor HEAD "$target_revision" || {
+        echo "error: target is older than or diverges from HEAD; refusing to reset local history" >&2
+        exit 1
+    }
+    git merge --ff-only FETCH_HEAD
+elif (( PULL )); then
     echo "==> Updating checkout (fast-forward only)"
     git pull --ff-only
 fi
 new_revision=$(git rev-parse HEAD)
 echo "==> Target revision:  $new_revision"
+echo "==> Checkout branch: $(git symbolic-ref --short -q HEAD || echo detached)"
+if [[ $old_revision == "$new_revision" ]]; then
+    echo "NOTE: checkout revision is unchanged; reinstalling this revision."
+    echo "A fix on another branch is not included automatically; select it with --ref REF."
+fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     echo "==> Creating virtual environment"
@@ -201,6 +231,8 @@ fi
 
 echo "==> Installing target revision into the virtual environment"
 "$VENV_DIR/bin/python" -m pip install --no-deps --force-reinstall --no-build-isolation "$APP_DIR"
+echo "==> Verifying installed Python source against $new_revision"
+"$VENV_DIR/bin/python" -I "$APP_DIR/deploy/verify-installed-package.py" "$APP_DIR/src/fd_sightings"
 # setuptools may generate build/ and *.egg-info in the checkout. Do not leave
 # them behind to surprise an older upgrade script or an operator's git status.
 clean_build_artifacts
