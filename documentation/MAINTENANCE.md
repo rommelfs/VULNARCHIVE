@@ -193,6 +193,24 @@ that a claimed security defect is valid. Publication thresholds and ambiguous
 candidate review still apply. After upgrading, reprocess affected archive
 periods with **Reprocess existing posts** and **Publish eligible entries**.
 
+Weakness identifiers (CWE) and valid CVSS vectors independently trigger analysis.
+Credential/information exposure, session takeover, security-control bypass, and
+missing certificate validation are recognized even without a CVE or the word
+“vulnerability”. Word wrapping does not split relevance phrases. Research and
+exploit references may be relevant evidence without constituting a new advisory;
+tool announcements alone are not a vulnerability report.
+
+To display the full audit's totals without copying a potentially long list:
+
+```bash
+python3 - <<'PY'
+import json
+with open('/tmp/vulnarchive-relevance-audit.json') as stream:
+    report = json.load(stream)
+print(json.dumps({key: value for key, value in report.items() if key != 'observations'}, indent=2))
+PY
+```
+
 The dump contains published GCVE records, not every archived post. An archive
 worker without **Publish eligible entries** only imports and analyzes messages.
 If its output says `processed: 0, skipped: 76`, all 76 URLs already exist in the

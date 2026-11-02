@@ -12,7 +12,7 @@ CWE_RE = re.compile(r"\bCWE-\d+\b", re.IGNORECASE)
 CVSS_RE = re.compile(r"CVSS:[34]\.\d/[A-Z]+:[A-Z](?:/[A-Z]+:[A-Z]+)+", re.IGNORECASE)
 
 VULN_TERMS = re.compile(
-    r"\b(vulnerabilit(?:y|ies)|CVE-|exploit|remote code execution|RCE|buffer overflow|"
+    r"\b(vulnerabilit(?:y|ies)|CVE-|exploit(?:s|ed|ing|ation|ability)?|attack primitives|remote code execution|RCE|buffer overflow|"
     r"use-after-free|path traversal|directory traversal|injection|cross-site scripting|XSS|SSRF|"
     r"privilege escalation|authentication bypass|arbitrary[- ]code[- ]execution|"
     r"sandbox[- ]escape|arbitrary file|denial of service|DoS)\b",
@@ -79,6 +79,20 @@ VULNERABILITY_TYPES = {
     "integer-overflow": re.compile(r"\binteger[- ](?:over|under)flows?\b", re.IGNORECASE),
     "timing-side-channel": re.compile(r"\btiming[- ]side[- ]channel|\btiming attack", re.IGNORECASE),
     "csrf": re.compile(r"\bCSRF\b|cross[- ]site request forgery", re.IGNORECASE),
+    "hardcoded-credentials": re.compile(r"\bhard[- ]?coded (?:passwords?|credentials?|secrets?|keys?)\b", re.IGNORECASE),
+    "information-exposure": re.compile(
+        r"\b(?:information|data|credential|password)[- ](?:disclosure|exposure|leak(?:age)?)\b|"
+        r"\bpassword (?:is )?exposed\b|\b(?:confidentiality|anonymity).{0,50}\bleakage\b", re.IGNORECASE,
+    ),
+    "session-takeover": re.compile(r"\b(?:session|account)[- ](?:takeover|hijacking)\b", re.IGNORECASE),
+    "security-control-bypass": re.compile(
+        r"\b(?:AppLocker|SAFER|software restriction polic(?:y|ies)|access[- ]control|authorization|authorisation)"
+        r"\b.{0,100}\bbypass\b", re.IGNORECASE,
+    ),
+    "missing-certificate-validation": re.compile(
+        r"\b(?:omitted|missing|disabled)\s+(?:upstream\s+)?certificate (?:and hostname )?validation\b",
+        re.IGNORECASE,
+    ),
 }
 
 SECURITY_NOTICE_RE = re.compile(
@@ -186,14 +200,21 @@ def extract(message: Message) -> Extraction:
     cve_ids = _unique(CVE_RE, text)
     ghsa_ids = _unique(GHSA_RE, text)
     gcve_ids = _unique(GCVE_RE, text)
-    vulnerability_types = sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(text))
+    cwe_ids = _unique(CWE_RE, text)
+    cvss_vectors = sorted(set(CVSS_RE.findall(text)))
+    signal_text = re.sub(r"\s+", " ", text)
+    vulnerability_types = sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(signal_text))
     relevance_evidence = []
-    if VULN_TERMS.search(text):
+    if VULN_TERMS.search(signal_text):
         relevance_evidence.append("vulnerability terminology")
     if cve_ids or ghsa_ids or gcve_ids:
         relevance_evidence.append("explicit vulnerability identifier")
+    if cwe_ids:
+        relevance_evidence.append("explicit weakness identifier")
+    if cvss_vectors:
+        relevance_evidence.append("CVSS vector")
     relevance_evidence.extend(f"vulnerability type: {name}" for name in vulnerability_types)
-    if SECURITY_NOTICE_RE.search(text):
+    if SECURITY_NOTICE_RE.search(signal_text):
         relevance_evidence.append("security advisory or update")
     headings = {heading.casefold() for heading in REPORT_HEADING_RE.findall(message.body)}
     if extracted_product and {"description", "impact"} <= headings and headings & {"examples", "steps to reproduce"}:
@@ -206,8 +227,8 @@ def extract(message: Message) -> Extraction:
         cve_ids=cve_ids,
         ghsa_ids=ghsa_ids,
         gcve_ids=gcve_ids,
-        cwe_ids=_unique(CWE_RE, text),
-        cvss_vectors=sorted(set(CVSS_RE.findall(text))),
+        cwe_ids=cwe_ids,
+        cvss_vectors=cvss_vectors,
         product_hint=extracted_product,
         vendor_hint=vendor,
         component_hint=(fields.get("component") or fields.get("module") or [""])[0],
