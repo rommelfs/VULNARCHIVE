@@ -140,6 +140,27 @@ contain environment-specific evidence; do not blindly commit them.
 
 ## Source maintenance
 
+`vulnarchive-sync.timer` runs `fd-sightings sync --retry-failed` every 15 minutes
+(with up to 60 seconds of jitter). Each run fetches the current feeds selected
+by `VA_SOURCES`, imports new posts, retries failed post downloads, and publishes
+eligible stored observations without manual approval of each run. Ambiguous
+matches still require review under the existing publication policy. A failed
+feed does not block other sources or publication of stored posts; the command
+reports partial failures in JSON and exits nonzero for systemd/journal visibility.
+
+Enable unattended operation and trigger an immediate run on the server:
+
+```bash
+sudo systemctl enable --now vulnarchive-sync.timer
+sudo systemctl start vulnarchive-sync.service
+sudo systemctl list-timers vulnarchive-sync.timer --no-pager
+sudo journalctl -u vulnarchive-sync.service -n 100 --no-pager
+```
+
+The upgrade preserves the timer's previous active state; upgrading alone does
+not enable a timer that was inactive. Current feeds cover a bounded recent
+window; use historical archive imports with `--publish` after longer outages.
+
 - Check current-feed sync logs at least daily.
 - A source enabled in `VA_SOURCES` may still be archive-only.
 - Test a small month with `--limit` before a large historical backfill.

@@ -160,12 +160,10 @@ except ValueError as exc:
     raise SystemExit(f"error: invalid VA_SOURCES in {path}: {exc}")
 if configured is None:
     print(f"WARNING: VA_SOURCES is absent in {path}; only full-disclosure is enabled.")
-    print("Add VA_SOURCES=full-disclosure,bugtraq to configure both sources; Bugtraq requires a historical archive import.")
-    print("Bugtraq is archive-only and requires an historical import worker.")
+    print("Add VA_SOURCES=full-disclosure,bugtraq to fetch and publish current posts from both sources.")
 else:
     print("Configured sources: " + ", ".join(sources))
-    if "bugtraq" in sources:
-        print("NOTE: Bugtraq has no current RSS feed; queue an historical archive import.")
+    print("Current feeds are fetched and eligible records published by vulnarchive-sync.timer when active.")
 PY
 
 # Resolve only the bind value needed for the readiness probe. Do not source the
