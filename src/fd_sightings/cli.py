@@ -356,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "archive":
             end = args.to_period or args.from_period
             aggregate: list[Result] = []
+            archive_errors: list[dict[str, str]] = []
             selected = adapters(args.sources)
             if args.archive_url != DEFAULT_ARCHIVE and len(selected) != 1:
                 raise ValueError("--archive-url can only override one source")
@@ -364,11 +365,27 @@ def main(argv: list[str] | None = None) -> int:
                     from dataclasses import replace
                     adapter = replace(adapter, archive_url=args.archive_url)
                 for year, month in periods(args.from_period, end):
+                    try:
+                        urls = adapter.month(source_client, year, month)
+                    except (RuntimeError, OSError) as exc:
+                        failed_period = f"{year:04d}-{month:02d}"
+                        archive_errors.append({
+                            "source": adapter.source_id,
+                            "period": failed_period,
+                            "error": str(exc),
+                        })
+                        print(
+                            f"Archive listing failed for {adapter.source_id} "
+                            f"{failed_period}: {exc}", file=sys.stderr,
+                        )
+                        continue
                     aggregate.extend(_process(
-                        args, adapter.month(source_client, year, month), store,
+                        args, urls, store,
                         source_client, lookup, adapter, cpe_registry,
                     ))
             summary = _summary(aggregate, args.vl_url)
+            summary["failed_archives"] = len(archive_errors)
+            summary["archive_errors"] = archive_errors
             if args.publish:
                 from .policy import PublicationPolicy
                 from .publication import execute_automatic_publication
@@ -389,6 +406,8 @@ def main(argv: list[str] | None = None) -> int:
                     "hint": "Import does not publish records. Use archive --publish or the review publication dashboard.",
                 }
                 print(json.dumps(summary, indent=2))
+            if archive_errors:
+                return 1
         return 0
     finally:
         store.close()

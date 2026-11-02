@@ -1,5 +1,8 @@
 from pathlib import Path
+import importlib.util
 import stat
+import subprocess
+import tempfile
 import unittest
 
 
@@ -10,7 +13,7 @@ class UpgradeScriptTests(unittest.TestCase):
         self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
         for expected in (
             "set -Eeuo pipefail",
-            "UPGRADE_SCRIPT_VERSION=4",
+            "UPGRADE_SCRIPT_VERSION=5",
             "flock -n",
             "git pull --ff-only",
             "clean_build_artifacts",
@@ -37,7 +40,7 @@ class UpgradeScriptTests(unittest.TestCase):
         self.assertIn("sudo /opt/vulnarchive/deploy/upgrade.sh", deployment)
         self.assertIn("--no-pull", deployment)
         self.assertIn("rm -rf -- build src/fd_sightings.egg-info", deployment)
-        self.assertIn("VULNARCHIVE upgrade script 4", deployment)
+        self.assertIn("VULNARCHIVE upgrade script 5", deployment)
         self.assertIn("sudo /opt/vulnarchive/deploy/install-apache-config.sh", deployment)
 
     def test_apache_installer_backs_up_validates_and_reloads(self):
@@ -57,6 +60,36 @@ class UpgradeScriptTests(unittest.TestCase):
         package = (root / "src/fd_sightings/__init__.py").read_text(encoding="utf-8")
         self.assertIn('version = "0.3.0"', pyproject)
         self.assertIn('__version__ = "0.3.0"', package)
+
+    def test_upgrade_rejects_invalid_target_arguments_before_deployment(self):
+        script = Path(__file__).parents[1] / "deploy" / "upgrade.sh"
+        for args in (("--ref",), ("--ref", "--no-pull"),
+                     ("--no-pull", "--ref", "work"),
+                     ("--ref", "work", "--no-pull"),
+                     ("--ref", "work", "--ref", "main"),
+                     ("--no-pull", "unexpected")):
+            with self.subTest(args=args):
+                result = subprocess.run(["bash", str(script), *args], capture_output=True)
+                self.assertEqual(result.returncode, 2)
+
+    def test_installed_source_verification_detects_stale_or_missing_code(self):
+        script = Path(__file__).parents[1] / "deploy" / "verify-installed-package.py"
+        spec = importlib.util.spec_from_file_location("verify_installed", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            source, installed = Path(directory) / "source", Path(directory) / "installed"
+            source.mkdir()
+            installed.mkdir()
+            for root in (source, installed):
+                (root / "cli.py").write_text("new code\n")
+            module.verify(source, installed)
+            (installed / "cli.py").write_text("old code\n")
+            with self.assertRaisesRegex(RuntimeError, "source differs: cli.py"):
+                module.verify(source, installed)
+            (installed / "cli.py").unlink()
+            with self.assertRaisesRegex(RuntimeError, "file list differs"):
+                module.verify(source, installed)
 
 
 if __name__ == "__main__":
