@@ -161,8 +161,9 @@ after a controlled test publication, its canonical `/vulnerability/<ID>` route.
 4. Leave four-eyes disabled until two independent active reviewers are ready.
 5. Run `plan-auto`; inspect every proposed action.
 6. Test backup and restore before enabling unattended publication.
-7. Enable only Full Disclosure for current sync; queue Bugtraq month ranges as
-   historical workers.
+7. Set `VA_SOURCES=full-disclosure,bugtraq` (optionally add `bugtraq-ai`) and
+   enable `vulnarchive-sync.timer`. All three sources have current feeds.
+   The timer fetches new posts and publishes eligible records every 15 minutes.
 
 ## Upgrades
 

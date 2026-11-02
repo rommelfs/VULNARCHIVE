@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import date
 from pathlib import Path
+from xml.etree.ElementTree import ParseError
 
 from .cpe import CPERegistry
 from .http import Client
@@ -62,7 +63,8 @@ def make_parser() -> argparse.ArgumentParser:
     sync.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     sync.add_argument("--feed", default=DEFAULT_RSS)
     sync.add_argument("--limit", type=int, default=0)
-    sync.add_argument("--retry-failed", action="store_true")
+    sync.add_argument("--retry-failed", action="store_true",
+                      help="Retry failed post downloads and publications")
 
     archive = sub.add_parser("archive", help="Process one or more archive months")
     archive.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
@@ -289,18 +291,38 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
         elif args.command == "sync":
             results = []
+            feed_errors: list[dict[str, str]] = []
             selected = adapters(args.sources)
             if args.feed != DEFAULT_RSS and len(selected) != 1:
                 raise ValueError("--feed can only override one source")
             for adapter in selected:
+                retried_urls: set[str] = set()
+                if args.retry_failed:
+                    failures = store.import_failures([adapter.source_id])
+                    if args.limit:
+                        failures = failures[:args.limit]
+                    retry_urls = [str(row["source_url"]) for row in failures]
+                    retry_args = argparse.Namespace(**vars(args))
+                    # A failed refresh may coexist with a stored observation.
+                    retry_args.refresh = True
+                    results.extend(_process(
+                        retry_args, retry_urls, store, source_client, lookup, adapter, cpe_registry,
+                    ))
+                    retried_urls.update(retry_urls)
                 if args.feed == DEFAULT_RSS and not adapter.has_current_feed:
                     print(
                         f"source {adapter.source_id} has no current RSS feed; "
                         "use the archive command for historical import",
                         file=sys.stderr,
                     )
-                urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
-                        else parse_rss(source_client.get_text(args.feed)))
+                try:
+                    urls = (adapter.feed(source_client) if args.feed == DEFAULT_RSS
+                            else parse_rss(source_client.get_text(args.feed)))
+                except (RuntimeError, OSError, ValueError, ParseError) as exc:
+                    feed_errors.append({"source": adapter.source_id, "error": str(exc)})
+                    print(f"Feed failed for {adapter.source_id}: {exc}", file=sys.stderr)
+                    continue
+                urls = [url for url in urls if url not in retried_urls]
                 results.extend(_process(args, urls, store, source_client, lookup, adapter, cpe_registry))
             from .policy import PublicationPolicy
             from .publication import execute_automatic_publication
@@ -310,7 +332,15 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
                 retry_failed=args.retry_failed,
             )
-            print(json.dumps({"import": _summary(results, args.vl_url), "publications": publications}, indent=2))
+            summary = _summary(results, args.vl_url)
+            summary["failed_feeds"] = len(feed_errors)
+            summary["feed_errors"] = feed_errors
+            print(json.dumps({"import": summary, "publications": publications}, indent=2))
+            if feed_errors or summary["failed"] or any(
+                operation.get("status") == "failed"
+                for outcome in publications for operation in outcome["operations"]
+            ):
+                return 1
         elif args.command == "url":
             results = _process(
                 args, [args.url], store, source_client, lookup,
