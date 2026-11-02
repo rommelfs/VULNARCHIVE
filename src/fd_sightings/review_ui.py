@@ -312,6 +312,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     data.get("from_period", [""])[0], data.get("to_period", [""])[0],
                     limit=limit, semantic=data.get("semantic", [""])[0] == "1",
                     refresh=data.get("refresh", [""])[0] == "1", sources=data.get("source", []),
+                    publish=data.get("publish", [""])[0] == "1",
                 )
         except (ValueError, OSError) as exc:
             self._send(_layout("Import error", f'<div class="panel"><h1>Import could not be started</h1><p>{_e(exc)}</p><p><a href="/workers">Back</a></p></div>'), 400)
@@ -370,7 +371,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
 {source_controls}<label>Limit <input type="number" name="limit" value="0" min="0" max="10000"></label><button>Retry failed downloads</button></form>
 <table><thead><tr><th>Source</th><th>Post</th><th>Attempts</th><th>Last error</th></tr></thead><tbody>{failure_rows or '<tr><td colspan="4">No failed downloads.</td></tr>'}</tbody></table></div>
 <div class="panel"><h1>Historical archive imports</h1>
-<p>Start one bounded background worker. Workers run sequentially and only import and match posts; they do not publish records.</p>
+<p>Workers run sequentially and import and match posts. Select “Publish eligible entries” to also publish qualifying posts from the selected months, including already imported posts. Otherwise no records are published.</p>
+<p>Already imported posts are skipped unless “Reprocess existing posts” is selected. Zero relevant posts in a skipped import does not mean the stored posts are irrelevant. Publication eligibility is shown on the <a href="/publish">publication dashboard</a>.</p>
 <form method="post" action="/workers"><input type="hidden" name="csrf" value="{_e(self.server.csrf_token)}">
 <p class="muted">Use the calendar controls to select complete archive months. Future months cannot be queued.</p>
 <div class="toolbar"><label>From month <input type="month" name="from_period" min="1993-01" max="{current_month}" value="{previous_month}" required aria-label="First archive month"></label>
@@ -378,7 +380,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
 <label>Limit per month <input type="number" name="limit" value="0" min="0" max="10000"></label>
 {source_controls}
 <label><input type="checkbox" name="semantic" value="1"> Candidate search (slower)</label>
-<label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label><button>Start import worker</button></div></form></div>
+<label><input type="checkbox" name="refresh" value="1"> Reprocess existing posts</label>
+<label><input type="checkbox" name="publish" value="1"> Publish eligible entries</label><button>Start import worker</button></div></form></div>
 <div class="panel"><h2>Most recent workers</h2><p class="muted">Showing at most 100 jobs. Open a job to view its live output.</p><table><thead><tr><th>ID</th><th>Period</th><th>Status</th><th>Created</th></tr></thead>
 <tbody>{rows or '<tr><td colspan="4">No import workers yet.</td></tr>'}</tbody></table></div>'''
         self._send(_layout("Archive imports", content))

@@ -266,11 +266,14 @@ def execute_automatic_publication(
     dry_run: bool = False,
     retry_failed: bool = False,
     source_url: str = "",
+    source_urls: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     outcomes: list[dict[str, Any]] = []
     actionable = 0
     for row in store.automatic_candidates():
         if source_url and row["source_url"] != source_url:
+            continue
+        if source_urls is not None and row["source_url"] not in source_urls:
             continue
         plan = plan_observation(row, policy)
         if not dry_run and _plan_is_complete(store, plan, policy):

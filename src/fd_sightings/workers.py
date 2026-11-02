@@ -61,6 +61,7 @@ class ImportWorkerManager:
     def submit(
         self, start: str, end: str, *, limit: int = 0,
         semantic: bool = False, refresh: bool = False, sources: list[str] | None = None,
+        publish: bool = False,
     ) -> dict[str, Any]:
         first = _month_number(start)
         last = _month_number(end)
@@ -87,6 +88,7 @@ class ImportWorkerManager:
             "limit": limit,
             "semantic": semantic,
             "refresh": refresh,
+            "publish": publish,
             "sources": source_ids,
             "created_at": _now(),
             "started_at": "",
@@ -136,6 +138,8 @@ class ImportWorkerManager:
             if job.get("refresh"):
                 command.append("--refresh")
             command.extend(["archive", "--from-period", job["from_period"], "--to-period", job["to_period"]])
+            if job.get("publish"):
+                command.append("--publish")
         for source_id in job.get("sources") or ["full-disclosure"]:
             command.extend(["--source", source_id])
         if job["limit"]:
