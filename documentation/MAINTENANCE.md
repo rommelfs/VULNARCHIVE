@@ -170,6 +170,29 @@ window; use historical archive imports with `--publish` after longer outages.
 
 ## Imported posts missing from the vulnerability dump
 
+Audit all stored non-relevant classifications offline before reprocessing:
+
+```bash
+sudo -u vulnarchive /opt/vulnarchive/.venv/bin/fd-sightings \
+  --db /opt/vulnarchive/data/fd-sightings.sqlite audit-relevance \
+  --output /tmp/vulnarchive-relevance-audit.json
+```
+
+This opens SQLite in read-only mode, performs no migrations or network requests,
+and does not update observations or publish records. The JSON report counts all
+scanned posts, stored non-relevant posts, newly recognized posts, and those still
+classified as non-relevant. It lists every stored non-relevant post, including
+its URL, title, review state, and current relevance evidence. A non-relevant
+classification is distinct from an analyst's rejection. Remaining non-relevant
+entries need inspection too; the audit is not a guarantee of semantic recall.
+
+Relevance recognizes explicit identifiers, recognized weakness types, security
+advisories/updates, and structured product reports with description, impact, and
+technical examples. These signals route posts into analysis; they do not prove
+that a claimed security defect is valid. Publication thresholds and ambiguous
+candidate review still apply. After upgrading, reprocess affected archive
+periods with **Reprocess existing posts** and **Publish eligible entries**.
+
 The dump contains published GCVE records, not every archived post. An archive
 worker without **Publish eligible entries** only imports and analyzes messages.
 If its output says `processed: 0, skipped: 76`, all 76 URLs already exist in the

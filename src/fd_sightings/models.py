@@ -43,6 +43,7 @@ class Extraction:
     poc_evidence: list[str] = field(default_factory=list)
     poc_links: list[str] = field(default_factory=list)
     relevant: bool = False
+    relevance_evidence: list[str] = field(default_factory=list)
 
     @property
     def proposed_type(self) -> str:

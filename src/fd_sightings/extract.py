@@ -76,7 +76,18 @@ VULNERABILITY_TYPES = {
     "sql-injection": re.compile(r"\bSQL injection\b|\bSQLi\b", re.IGNORECASE),
     "ssrf": re.compile(r"\bSSRF\b|server-side request forgery", re.IGNORECASE),
     "use-after-free": re.compile(r"\buse-after-free\b", re.IGNORECASE),
+    "integer-overflow": re.compile(r"\binteger[- ](?:over|under)flows?\b", re.IGNORECASE),
+    "timing-side-channel": re.compile(r"\btiming[- ]side[- ]channel|\btiming attack", re.IGNORECASE),
+    "csrf": re.compile(r"\bCSRF\b|cross[- ]site request forgery", re.IGNORECASE),
 }
+
+SECURITY_NOTICE_RE = re.compile(
+    r"\bsecurity (?:advisory|update|fix|issues?)\b", re.IGNORECASE,
+)
+REPORT_HEADING_RE = re.compile(
+    r"^\s*(?:\#{1,6}\s+)?(description|impact|examples|steps to reproduce)\s*:?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # Mailing-list subjects and structured Product fields sometimes contain only
 # the document type.  Publishing that label as a CPE product creates entries
@@ -172,10 +183,29 @@ def extract(message: Message) -> Extraction:
         evidence.append("execution evidence")
         score += 1
 
+    cve_ids = _unique(CVE_RE, text)
+    ghsa_ids = _unique(GHSA_RE, text)
+    gcve_ids = _unique(GCVE_RE, text)
+    vulnerability_types = sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(text))
+    relevance_evidence = []
+    if VULN_TERMS.search(text):
+        relevance_evidence.append("vulnerability terminology")
+    if cve_ids or ghsa_ids or gcve_ids:
+        relevance_evidence.append("explicit vulnerability identifier")
+    relevance_evidence.extend(f"vulnerability type: {name}" for name in vulnerability_types)
+    if SECURITY_NOTICE_RE.search(text):
+        relevance_evidence.append("security advisory or update")
+    headings = {heading.casefold() for heading in REPORT_HEADING_RE.findall(message.body)}
+    if extracted_product and {"description", "impact"} <= headings and headings & {"examples", "steps to reproduce"}:
+        # Relevance routes evidence into analysis; publication policy still
+        # decides whether it qualifies. Reports need not use a fixed weakness
+        # name to describe a security defect worth considering.
+        relevance_evidence.append("structured product report with impact and technical examples")
+
     return Extraction(
-        cve_ids=_unique(CVE_RE, text),
-        ghsa_ids=_unique(GHSA_RE, text),
-        gcve_ids=_unique(GCVE_RE, text),
+        cve_ids=cve_ids,
+        ghsa_ids=ghsa_ids,
+        gcve_ids=gcve_ids,
         cwe_ids=_unique(CWE_RE, text),
         cvss_vectors=sorted(set(CVSS_RE.findall(text))),
         product_hint=extracted_product,
@@ -186,9 +216,10 @@ def extract(message: Message) -> Extraction:
         version_constraints=constraints,
         fixed_versions=sorted(fixed_versions),
         commits=sorted({match.group(1).lower() for match in COMMIT_RE.finditer(text)}),
-        vulnerability_types=sorted(name for name, pattern in VULNERABILITY_TYPES.items() if pattern.search(text)),
+        vulnerability_types=vulnerability_types,
         poc_score=score,
         poc_evidence=evidence,
         poc_links=poc_links,
-        relevant=bool(VULN_TERMS.search(text)),
+        relevant=bool(relevance_evidence),
+        relevance_evidence=relevance_evidence,
     )
