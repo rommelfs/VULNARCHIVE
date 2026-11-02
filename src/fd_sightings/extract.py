@@ -14,7 +14,8 @@ CVSS_RE = re.compile(r"CVSS:[34]\.\d/[A-Z]+:[A-Z](?:/[A-Z]+:[A-Z]+)+", re.IGNORE
 VULN_TERMS = re.compile(
     r"\b(vulnerabilit(?:y|ies)|CVE-|exploit|remote code execution|RCE|buffer overflow|"
     r"use-after-free|path traversal|directory traversal|injection|cross-site scripting|XSS|SSRF|"
-    r"privilege escalation|authentication bypass|arbitrary file|denial of service|DoS)\b",
+    r"privilege escalation|authentication bypass|arbitrary[- ]code[- ]execution|"
+    r"sandbox[- ]escape|arbitrary file|denial of service|DoS)\b",
     re.IGNORECASE,
 )
 
