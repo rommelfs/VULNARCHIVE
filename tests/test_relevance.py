@@ -12,6 +12,32 @@ from fd_sightings.store import Store
 
 
 class RelevanceTests(unittest.TestCase):
+    def test_historical_audit_reports_are_recognized_but_tool_announcements_are_not(self):
+        fixture = Path(__file__).parent / "fixtures" / "relevance-historical-reports.json"
+        cases = json.loads(fixture.read_text())
+        self.assertEqual(len(cases), 10)
+        self.assertEqual(sum(case["expected_relevant"] for case in cases), 8)
+        for case in cases:
+            with self.subTest(source=case["message"]["source_url"]):
+                extraction = extract(Message(**case["message"]))
+                self.assertEqual(extraction.relevant, case["expected_relevant"])
+                self.assertEqual(bool(extraction.relevance_evidence), case["expected_relevant"])
+
+    def test_cwe_and_cvss_are_independent_relevance_signals(self):
+        for title, evidence in (
+            ("Widget CWE-798", "explicit weakness identifier"),
+            ("Widget CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "CVSS vector"),
+        ):
+            with self.subTest(title=title):
+                extraction = extract(Message("https://example.test/report", title))
+                self.assertTrue(extraction.relevant)
+                self.assertIn(evidence, extraction.relevance_evidence)
+
+    def test_wrapped_weakness_terms_are_recognized(self):
+        extraction = extract(Message("https://example.test/report", "Widget report", body="A hard-coded\npassword is shared by every account."))
+        self.assertTrue(extraction.relevant)
+        self.assertIn("hardcoded-credentials", extraction.vulnerability_types)
+
     def test_all_eight_observed_missed_reports_are_relevant_with_evidence(self):
         fixture = Path(__file__).parent / "fixtures" / "relevance-missed-reports.json"
         cases = json.loads(fixture.read_text())
