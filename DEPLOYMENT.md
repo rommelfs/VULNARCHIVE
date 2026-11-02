@@ -166,7 +166,7 @@ after a controlled test publication, its canonical `/vulnerability/<ID>` route.
 
 ## Upgrades
 
-The current repository ships **VULNARCHIVE upgrade script 4**. Confirm the
+The current repository ships **VULNARCHIVE upgrade script 5**. Confirm the
 deployed script version with `deploy/upgrade.sh --version` before relying on the
 steps described below.
 
@@ -179,6 +179,31 @@ sudo /opt/vulnarchive/deploy/upgrade.sh
 
 To install an already checked-out, operator-verified revision without contacting
 the Git remote, use `sudo /opt/vulnarchive/deploy/upgrade.sh --no-pull`.
+
+To install a fix that is available on another branch, explicitly select its
+branch or commit. For example:
+
+```bash
+sudo /opt/vulnarchive/deploy/upgrade.sh --ref work
+```
+
+This fetches the requested revision from `origin` and advances the checkout only
+if it is a fast-forward. Older or diverging targets are rejected without resetting
+local history. The selection applies to this invocation; it does not change the
+branch's upstream. Without `--ref`, upgrades still pull the configured upstream.
+The script prints the branch and exact target commit, warns when the revision is
+unchanged, and verifies installed Python files against the checkout before
+restarting services. A mismatch fails the upgrade.
+
+Scripts older than version 5 do not understand `--ref`. Bootstrap the new script
+from the fix branch once, from a clean checkout:
+
+```bash
+cd /opt/vulnarchive
+git fetch origin work
+git merge --ff-only origin/work
+sudo ./deploy/upgrade.sh --no-pull
+```
 
 The upgrade script removes only disposable, untracked package artifacts before
 checking the tree. If an older revision must be prepared manually, the equivalent

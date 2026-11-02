@@ -34,10 +34,15 @@ class ArchivePublicationTests(unittest.TestCase):
         finally:
             store.close()
 
-    def run_archive(self, *options, urls=None, refresh=False):
+    def run_archive(self, *options, urls=None, refresh=False, failed_month=False):
+        def month(client, year, month):
+            if failed_month and month == 10:
+                raise RuntimeError("listing failed")
+            return self.urls[:1] if urls is None else urls
+
         adapter = SimpleNamespace(
             source_id="full-disclosure",
-            month=lambda client, year, month: self.urls[:1] if urls is None else urls,
+            month=month,
         )
         # Existing observations must not require downloads or lookup requests.
         client = SimpleNamespace(get_text=lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("download failed")))
@@ -47,7 +52,7 @@ class ArchivePublicationTests(unittest.TestCase):
             self.assertEqual(main([
                 "--db", str(self.database), *(["--refresh"] if refresh else []),
                 "archive", "--from-period", "2026-10", *options,
-            ]), 0)
+            ]), 1 if failed_month else 0)
         return json.loads(output.getvalue())
 
     def records(self):
@@ -89,6 +94,13 @@ class ArchivePublicationTests(unittest.TestCase):
         self.assertEqual(result["import"]["failed"], 1)
         self.assertEqual(result["publications"], [])
         self.assertEqual(self.records(), [])
+
+    def test_listing_failure_keeps_error_status_and_publishes_successful_month(self):
+        result = self.run_archive("--publish", "--to-period", "2026-11", failed_month=True)
+        self.assertEqual(result["import"]["failed_archives"], 1)
+        self.assertEqual(result["import"]["archive_errors"][0]["period"], "2026-10")
+        self.assertEqual(result["import"]["skipped"], 1)
+        self.assertEqual(len(self.records()), 1)
 
 
 if __name__ == "__main__":
