@@ -196,6 +196,15 @@ extraction needs to be updated; failed refreshes are excluded from publication.
 The existing `publish-auto --retry-failed` command and publication dashboard
 instead consider eligible observations across the whole database.
 
+If a post exists in the archive but not in the dump, check its extraction and
+publication plan in review. Earlier versions did not recognize “arbitrary code
+execution” or “sandbox escape” as relevance terms; the Full Disclosure report
+`https://seclists.org/fulldisclosure/2026/Nov/7` was affected. After upgrading,
+run the November 2026 archive worker with both **Reprocess existing posts** and
+**Publish eligible entries** selected. Ordinary sync skips already imported
+posts, so an extraction fix requires this explicit reanalysis. Publication
+policy and candidate-review requirements still apply.
+
 ## User and access maintenance
 
 - Maintain at least two active administrators before enabling four-eyes policy.
