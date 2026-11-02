@@ -70,6 +70,10 @@ def make_parser() -> argparse.ArgumentParser:
     archive.add_argument("--to-period", type=period)
     archive.add_argument("--archive-url", default=DEFAULT_ARCHIVE)
     archive.add_argument("--limit", type=int, default=0, help="Maximum messages per month; useful for a pilot")
+    archive.add_argument("--publish", action="store_true",
+                         help="Publish eligible posts from this import, including already stored posts")
+    archive.add_argument("--retry-failed", action="store_true",
+                         help="With --publish, retry failed publications")
 
     one = sub.add_parser("url", help="Process one archive message")
     one.add_argument("url")
@@ -364,7 +368,27 @@ def main(argv: list[str] | None = None) -> int:
                         args, adapter.month(source_client, year, month), store,
                         source_client, lookup, adapter, cpe_registry,
                     ))
-            print(json.dumps(_summary(aggregate, args.vl_url), indent=2))
+            summary = _summary(aggregate, args.vl_url)
+            if args.publish:
+                from .policy import PublicationPolicy
+                from .publication import execute_automatic_publication
+                # Skipped posts still need publication if they were previously
+                # imported without --publish. Failed refreshes must not publish
+                # their older stored analysis in this run.
+                publications = execute_automatic_publication(
+                    store, PublicationPolicy.from_env(),
+                    source_urls={
+                        result.message.source_url for result in aggregate if not result.error
+                    },
+                    retry_failed=args.retry_failed,
+                )
+                print(json.dumps({"import": summary, "publications": publications}, indent=2))
+            else:
+                summary["publication"] = {
+                    "status": "not-requested",
+                    "hint": "Import does not publish records. Use archive --publish or the review publication dashboard.",
+                }
+                print(json.dumps(summary, indent=2))
         return 0
     finally:
         store.close()

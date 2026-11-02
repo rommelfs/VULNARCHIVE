@@ -147,6 +147,34 @@ contain environment-specific evidence; do not blindly commit them.
 - Use the review worker page for progress; avoid overlapping large backfills on
   the same single-host SQLite deployment.
 
+## Imported posts missing from the vulnerability dump
+
+The dump contains published GCVE records, not every archived post. An archive
+worker without **Publish eligible entries** only imports and analyzes messages.
+If its output says `processed: 0, skipped: 76`, all 76 URLs already exist in the
+archive. Its `relevant: 0` counts newly analyzed posts only and does not describe
+the stored analyses.
+
+Check the review **Local automatic publication** dashboard or `fd-sightings
+plan-auto` for publication eligibility. Publish selected months with:
+
+```bash
+fd-sightings archive --source full-disclosure --source bugtraq \
+  --from-period 2026-10 --to-period 2026-11 --publish
+```
+
+In the UI, select the same months and sources and check **Publish eligible
+entries**. This includes already imported posts without downloading them again;
+the publication ledger prevents duplicate allocations. Only URLs selected by
+this import, including its per-month limit, are considered. Publication policy
+still excludes posts that do not qualify and retains ambiguous matches for
+review. Add `--retry-failed` to retry failed publications. Use `--refresh` before
+`archive` (or **Reprocess existing posts** in the UI) only when the stored
+extraction needs to be updated; failed refreshes are excluded from publication.
+
+The existing `publish-auto --retry-failed` command and publication dashboard
+instead consider eligible observations across the whole database.
+
 ## User and access maintenance
 
 - Maintain at least two active administrators before enabling four-eyes policy.

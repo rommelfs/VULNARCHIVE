@@ -137,6 +137,10 @@ fd-sightings sync --source full-disclosure --retry-failed
 fd-sightings archive --source full-disclosure --source bugtraq \
   --from-period 2001-01 --to-period 2001-03
 
+# Publish eligible posts from selected archive months, including stored posts
+fd-sightings archive --source full-disclosure --source bugtraq \
+  --from-period 2026-10 --to-period 2026-11 --publish
+
 # One URL
 fd-sightings url https://seclists.org/fulldisclosure/2024/Jan/1
 

@@ -231,8 +231,8 @@ class ReviewUITest(unittest.TestCase):
                 self.submitted = []
                 self.job_list_calls = 0
 
-            def submit(self, start, end, *, limit=0, semantic=False, refresh=False, sources=None):
-                self.submitted.append((start, end, limit, semantic, refresh, sources))
+            def submit(self, start, end, *, limit=0, semantic=False, refresh=False, sources=None, publish=False):
+                self.submitted.append((start, end, limit, semantic, refresh, sources, publish))
                 return {"id": "abc123"}
 
             def submit_retry(self, *, limit=0, sources=None):
@@ -277,6 +277,7 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("both SecurityFocus Bugtraq lists have current feeds", page)
         self.assertIn("Failed post downloads", page)
         self.assertIn("Retry failed downloads", page)
+        self.assertIn('name="publish" value="1"> Publish eligible entries', page)
 
         encoded = urllib.parse.urlencode({
             "csrf": self.server.csrf_token,
@@ -285,6 +286,7 @@ class ReviewUITest(unittest.TestCase):
             "limit": "25",
             "semantic": "1",
             "refresh": "1",
+            "publish": "1",
             "source": ["full-disclosure", "bugtraq"],
         }, doseq=True).encode()
         request = self.request("/workers", method="POST")
@@ -300,7 +302,7 @@ class ReviewUITest(unittest.TestCase):
         self.assertIn("/review/workers?job=abc123", redirected.exception.headers["Location"])
         self.assertEqual(workers.submitted, [(
             "2024-01", "2024-03", 25, True, True,
-            ["full-disclosure", "bugtraq"],
+            ["full-disclosure", "bugtraq"], True,
         )])
         with urllib.request.urlopen(self.request("/workers?job=abc123")) as response:
             live_page = response.read().decode()

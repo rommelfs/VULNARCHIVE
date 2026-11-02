@@ -11,6 +11,16 @@ from fd_sightings.workers import ImportWorkerManager
 
 
 class ImportWorkerManagerTests(unittest.TestCase):
+    def test_worker_can_explicitly_publish_selected_archive_posts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ImportWorkerManager(Path(directory) / "archive.sqlite")
+            captured = []
+            with patch("fd_sightings.workers.subprocess.run", side_effect=lambda command, **kwargs: captured.append(command) or type("Result", (), {"returncode": 0})()):
+                job = manager.submit("2026-10", "2026-11", publish=True)
+                manager.executor.shutdown(wait=True)
+            self.assertIn("--publish", captured[0])
+            self.assertTrue(manager.get(job["id"])["publish"])
+
     def test_validates_period_and_builds_non_publishing_archive_command(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "archive.sqlite"
@@ -43,6 +53,7 @@ class ImportWorkerManagerTests(unittest.TestCase):
             self.assertEqual(stored["sources"], ["full-disclosure", "bugtraq"])
             self.assertNotIn("sync", command)
             self.assertNotIn("publish-auto", command)
+            self.assertNotIn("--publish", command)
 
     def test_rejects_invalid_or_excessive_ranges(self):
         with tempfile.TemporaryDirectory() as directory:
