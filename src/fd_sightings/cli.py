@@ -84,6 +84,10 @@ def make_parser() -> argparse.ArgumentParser:
     rescan.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     rescan.add_argument("--limit", type=int, default=0, help="Maximum observations; 0 processes all")
 
+    audit = sub.add_parser("audit-relevance", help="Audit stored non-relevant posts offline without changing the database")
+    audit.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
+    audit.add_argument("--output", default="-", help="Write the JSON report to this path")
+
     retry = sub.add_parser("retry-failed", help="Retry posts whose download previously failed")
     retry.add_argument("--source", action="append", choices=sorted(SOURCES), dest="sources")
     retry.add_argument("--limit", type=int, default=0)
@@ -205,6 +209,15 @@ def _process(args: argparse.Namespace, urls: list[str], store: Store, source_cli
 
 def main(argv: list[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
+    if args.command == "audit-relevance":
+        from .relevance_audit import audit_relevance
+        report = audit_relevance(args.db, sources=args.sources)
+        encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+        if args.output == "-":
+            sys.stdout.write(encoded)
+        else:
+            Path(args.output).write_text(encoded, encoding="utf-8")
+        return 0
     if args.command == "evaluate":
         from .evaluation import evaluate_cases, load_cases
         from .llm import PROMPT_VERSION
