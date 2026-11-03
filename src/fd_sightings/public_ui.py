@@ -13,6 +13,7 @@ from .public_api import publication_response
 from .dump import ndjson_lines
 from .review_ui import _e
 from .store import Store
+from .parsers import parse_hyperkitty_message
 
 
 def _public_layout(title: str, content: str) -> bytes:
@@ -53,6 +54,29 @@ def _positive_int(params: dict[str, list[str]], name: str, default: int, maximum
     if value < 1 or value > maximum:
         raise ValueError(f"{name} must be between 1 and {maximum}")
     return value
+
+
+def _record_source_date(record: dict[str, object], store: Store | None = None) -> datetime | None:
+    extensions = record.get("containers", {}).get("cna", {}).get("x_gcve", [])
+    if not isinstance(extensions, list):
+        return None
+    for extension in extensions:
+        provenance = extension.get("x_vulnarchive") if isinstance(extension, dict) else None
+        if isinstance(provenance, dict):
+            original_url = str(provenance.get("originalUrl") or "")
+            if store is not None and original_url:
+                row = store.get(original_url)
+                if row:
+                    published = _post_date(row.get("published"))
+                    if not published and row.get("source_id") in {"bugtraq", "bugtraq-ai"} and row.get("raw_source"):
+                        message = parse_hyperkitty_message(str(row["raw_source"]), original_url)
+                        published = _post_date(message.published)
+                    if published:
+                        return published
+            published = _post_date(provenance.get("sourcePublishedAt"))
+            if published:
+                return published
+    return None
 
 
 class PublicServer(HTTPServer):
@@ -330,26 +354,51 @@ instances</a> regardless of identifier format.</p>
         try:
             page = _positive_int(params, "page", 1, 1_000_000)
             per_page = _positive_int(params, "per_page", 50, 100)
+            sort_values = params.get("sort", ["source"])
+            if len(sort_values) != 1 or sort_values[0] not in {"source", "published"}:
+                raise ValueError("sort must be source or published")
+            sort = sort_values[0]
         except ValueError as exc:
             self._send(_public_layout("Invalid query", f'<h1>Invalid query</h1><p>{_e(exc)}</p>'), "text/html; charset=utf-8", 400)
             return
-        records = self.server.store.published_gcve_records()
-        records.sort(key=lambda item: str(item.get("cveMetadata", {}).get("vulnId", "")), reverse=True)
+        records = [
+            (record, _record_source_date(record, self.server.store), _post_date(record.get("cveMetadata", {}).get("datePublished")))
+            for record in self.server.store.published_gcve_records()
+        ]
+        earliest = datetime.min.replace(tzinfo=timezone.utc)
+        records.sort(key=lambda item: (
+            (item[1] or item[2] or earliest) if sort == "source" else (item[2] or earliest),
+            item[2] or earliest, str(item[0].get("cveMetadata", {}).get("vulnId", "")),
+        ), reverse=True)
         total, pages = len(records), max(1, math.ceil(len(records) / per_page))
         page = min(page, pages)
         cards = []
-        for record in records[(page - 1) * per_page:page * per_page]:
+        for record, source_date, published_date in records[(page - 1) * per_page:page * per_page]:
             metadata, cna = record.get("cveMetadata", {}), record.get("containers", {}).get("cna", {})
             identifier = str(metadata.get("vulnId", ""))
             descriptions = cna.get("descriptions", []) if isinstance(cna, dict) else []
             summary = next((str(item.get("value", "")) for item in descriptions if isinstance(item, dict)), "")
-            cards.append(f'<article class="card"><h2><a href="/vulnerability/{urllib.parse.quote(identifier)}">{html.escape(identifier)}</a></h2><h3>{html.escape(str(cna.get("title") or identifier))}</h3><p>{html.escape(summary[:400])}</p></article>')
+            dates = []
+            for label, date in (("Source post", source_date), ("Published here", published_date)):
+                if date:
+                    dates.append(f'{label}: <time datetime="{date.isoformat()}">{date.date().isoformat()}</time>')
+            cards.append(f'<article class="card"><h2><a href="/vulnerability/{urllib.parse.quote(identifier)}">{html.escape(identifier)}</a></h2><h3>{html.escape(str(cna.get("title") or identifier))}</h3><p class="muted">{" · ".join(dates)}</p><p>{html.escape(summary[:400])}</p></article>')
         links = [f'<li>Page {page} of {pages} · {total} vulnerabilities</li>']
         if page > 1:
-            links.insert(0, f'<li><a rel="prev" href="/vulnerability/?page={page - 1}&amp;per_page={per_page}">Previous</a></li>')
+            links.insert(0, f'<li><a rel="prev" href="/vulnerability/?page={page - 1}&amp;per_page={per_page}&amp;sort={sort}">Previous</a></li>')
         if page < pages:
-            links.append(f'<li><a rel="next" href="/vulnerability/?page={page + 1}&amp;per_page={per_page}">Next</a></li>')
-        content = f'<div class="panel"><h1>Local vulnerabilities</h1>{"".join(cards) or "<p>No local vulnerabilities published.</p>"}<nav><ul class="pagination">{"".join(links)}</ul></nav></div>'
+            links.append(f'<li><a rel="next" href="/vulnerability/?page={page + 1}&amp;per_page={per_page}&amp;sort={sort}">Next</a></li>')
+        pagination = f'<nav><ul class="pagination">{"".join(links)}</ul></nav>'
+        options = "".join(
+            f'<option value="{value}"{" selected" if sort == value else ""}>{label}</option>'
+            for value, label in (("source", "Newest source posts"), ("published", "Recently published here"))
+        )
+        controls = (
+            f'<form method="get" action="/vulnerability/"><label>Sort by <select name="sort">{options}</select></label> '
+            f'<input type="hidden" name="per_page" value="{per_page}"><button>Apply</button></form>'
+            '<p class="muted">Source dates show when the original post appeared. Entries without a source date use their local publication date for sorting.</p>'
+        )
+        content = f'<div class="panel"><h1>Local vulnerabilities</h1>{controls}{pagination}{"".join(cards) or "<p>No local vulnerabilities published.</p>"}{pagination}</div>'
         self._send(_public_layout("Local vulnerabilities", content), "text/html; charset=utf-8")
 
 
