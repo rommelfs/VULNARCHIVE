@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
@@ -233,9 +234,23 @@ def parse_hyperkitty_message(html: str, source_url: str) -> Message:
     body = "\n".join(line.strip() for line in "".join(parser.body_parts).splitlines() if line.strip())
     message_id = parser.meta.get("message-id", "") or parser.message_id
     match = re.search(r"^Message-ID:\s*(\S+)", body, re.IGNORECASE | re.MULTILINE)
+    published = parser.published
+    if not published:
+        # HyperKitty also renders duplicate desktop/mobile date labels without
+        # a <time datetime>. The combined text is not a parseable timestamp.
+        # Keep the explicit calendar date; no timezone or time is implied.
+        label = " ".join(" ".join(parser.date_parts).split())
+        date_match = re.search(r"\b\d{1,2} [A-Za-z]{3} \d{4}\b", label)
+        if date_match:
+            try:
+                published = datetime.strptime(date_match.group(), "%d %b %Y").date().isoformat()
+            except ValueError:
+                pass
+        if not published:
+            published = label
     return Message(
         source_url=source_url, title=title, author=author,
-        published=parser.published or " ".join("".join(parser.date_parts).split()), body=body,
+        published=published, body=body,
         links=_safe_links(source_url, parser.links), raw_source=html,
         source_format="text/html", message_id=message_id or (match.group(1) if match else ""),
     )

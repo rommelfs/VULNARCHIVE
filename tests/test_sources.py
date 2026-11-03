@@ -18,6 +18,18 @@ MESSAGE = """<html><head><meta name="Subject" content="Widget advisory">
 
 
 class SourcesTest(unittest.TestCase):
+    def test_hyperkitty_duplicate_date_labels_preserve_explicit_calendar_date(self):
+        header = '''<h1>Historical advisory</h1><div class="email-date right">
+            <span class="date d-none d-sm-inline">29 Sep 2026</span>
+            <span class="date d-sm-none">29 Sep '26</span>
+            <div class="time"><span title="Sender's time: Sept. 29, 2026, 9:49 a.m.">10:49 a.m.</span></div>
+            </div><div class="email-body">A security advisory.</div>'''
+        message = SOURCES["bugtraq"].parse(header, "https://example.test/message")
+        self.assertEqual(message.published, "2026-09-29")
+        precise = SOURCES["bugtraq"].parse('<time datetime="2026-09-29T09:49:00Z"></time>' + header,
+                                            "https://example.test/message")
+        self.assertEqual(precise.published, "2026-09-29T09:49:00Z")
+
     def test_registry_exposes_full_disclosure_and_bugtraq(self) -> None:
         self.assertEqual([item.source_id for item in adapters(["bugtraq", "full-disclosure", "bugtraq"])],
                          ["bugtraq", "full-disclosure"])

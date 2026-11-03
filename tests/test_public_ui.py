@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from fd_sightings.public_ui import PublicServer
+from fd_sightings.public_ui import PublicServer, _record_source_date
 from fd_sightings.models import Extraction, Message
 from fd_sightings.store import Store
 
@@ -82,6 +82,68 @@ class PublicUITest(unittest.TestCase):
         self.assertIn("Page 1 of 2 · 2 vulnerabilities", page)
         self.assertIn('rel="next"', page)
         self.assertIn("/vulnerability/GCVE-1988-2026-2", page)
+
+    def test_latest_source_posts_precede_later_historical_imports(self) -> None:
+        for identifier, source_date, published in (
+            ("GCVE-1988-2026-0010", "2026-11-01T22:23:31Z", "2026-11-02T07:30:00Z"),
+            ("GCVE-1988-2026-9999", "2026-11-03T12:00:00Z", "2026-11-03T12:00:00Z"),
+        ):
+            source_url = f"https://example.test/{identifier}"
+            if identifier.endswith("9999"):
+                # Legacy HyperKitty rows contain duplicate date labels; their
+                # records incorrectly fell back to the import timestamp.
+                self.store.save(Message(
+                    source_url, "Historical advisory", source_id="bugtraq",
+                    published="1 Jul 2026 1 Jul '26 10:49 a.m.",
+                    raw_source='<div class="email-date"><span class="date">1 Jul 2026</span>'
+                               '<span class="date">1 Jul \'26</span><div class="time">10:49 a.m.</div></div>',
+                ), Extraction(), [])
+            record = {
+                "cveMetadata": {
+                    "vulnId": identifier, "state": "PUBLISHED",
+                    "assignerOrgId": os.getenv("VA_GNA_ORG_UUID", ""),
+                    "datePublished": published, "dateUpdated": published,
+                },
+                "containers": {"cna": {"title": identifier, "x_gcve": [
+                    {"x_vulnarchive": {"sourcePublishedAt": source_date, "originalUrl": source_url}},
+                ]}},
+            }
+            self.store.save_publication(identifier, "gcve:advisory", "gcve", gcve_id=identifier,
+                                        status="published", payload=record)
+        _, body, _ = self.get("/vulnerability/?per_page=1")
+        page = body.decode()
+        self.assertIn("/vulnerability/GCVE-1988-2026-0010", page)
+        self.assertNotIn("/vulnerability/GCVE-1988-2026-9999", page)
+        self.assertIn("Source post:", page)
+        self.assertIn('>2026-11-01</time>', page)
+        self.assertIn('>2026-11-02</time>', page)
+        self.assertIn("sort=source", page)
+        self.assertIn('<option value="source" selected>', page)
+        _, body, _ = self.get("/vulnerability/?per_page=1&sort=published")
+        page = body.decode()
+        self.assertIn("/vulnerability/GCVE-1988-2026-9999", page)
+        self.assertNotIn("/vulnerability/GCVE-1988-2026-0010", page)
+        self.assertIn("sort=published", page)
+        self.assertIn('>2026-07-01</time>', page)
+
+    def test_source_date_fallback_handles_missing_and_malformed_provenance(self) -> None:
+        self.assertIsNone(_record_source_date({}))
+        self.assertIsNone(_record_source_date({"containers": {"cna": {"x_gcve": {}}}}))
+        record = {"containers": {"cna": {"x_gcve": [None, {"x_vulnarchive": []},
+            {"x_vulnarchive": {"sourcePublishedAt": "invalid"}},
+            {"x_vulnarchive": {"sourcePublishedAt": "2026-11-01T23:00:00+01:00"}},
+        ]}}}
+        self.assertEqual(_record_source_date(record).isoformat(), "2026-11-01T22:00:00+00:00")
+        # The initial two records have no provenance and remain visible in
+        # chronological order using their local publication timestamps.
+        _, body, _ = self.get("/vulnerability/")
+        self.assertLess(body.index(b"/vulnerability/GCVE-1988-2026-2"), body.index(b"/vulnerability/GCVE-1988-2026-1"))
+
+    def test_vulnerability_overview_rejects_invalid_or_duplicate_sort(self) -> None:
+        for query in ("sort=invalid", "sort=", "sort=source&sort=published"):
+            with self.subTest(query=query), self.assertRaises(urllib.error.HTTPError) as error:
+                self.get("/vulnerability/?" + query)
+            self.assertEqual(error.exception.code, 400)
 
     def test_home_page_explains_gcve_bcp_and_links_reference_implementations(self) -> None:
         _, body, content_type = self.get("/")

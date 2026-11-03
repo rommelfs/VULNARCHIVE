@@ -170,6 +170,17 @@ window; use historical archive imports with `--publish` after longer outages.
 
 ## Imported posts missing from the vulnerability dump
 
+The **Local vulnerabilities** overview defaults to **Newest source posts**,
+using the original post's `sourcePublishedAt` timestamp rather than the GCVE ID.
+Historical posts imported later therefore do not push newer source reports
+off the first page. Select **Recently published here** to inspect recent local
+publications, including historical backfills. Both dates appear on each card;
+records without a usable source date fall back to local publication time.
+For legacy HyperKitty entries with duplicate desktop/mobile date labels, the
+overview recovers the calendar date from the stored HTML header without fetching
+the source again. New imports parse this header correctly. This display fallback
+does not rewrite previously published records or their publication timestamps.
+
 Audit all stored non-relevant classifications offline before reprocessing:
 
 ```bash
