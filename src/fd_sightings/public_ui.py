@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import urllib.parse
 import html
 import math
@@ -99,10 +100,34 @@ class PublicHandler(BaseHTTPRequestHandler):
         for name, value in headers.items():
             self.send_header(name.replace("_", "-"), value)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _json(self, value: object, status: int = 200, **headers: str) -> None:
         self._send(json.dumps(value, ensure_ascii=False).encode(), "application/json", status, **headers)
+
+    def do_HEAD(self) -> None:
+        self.do_GET()
+
+    def _dump(self) -> None:
+        body = b"".join(ndjson_lines(self.server.store))
+        # Hash the served bytes, so edits and removals invalidate the validator
+        # even when publication timestamps have not changed.
+        etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+        condition = self.headers.get("If-None-Match", "")
+        # GET/HEAD use weak comparison; quoted opaque tags can contain commas.
+        if condition.strip() == "*" or any(
+            match.group(1) == etag
+            for match in re.finditer(r'(?:W/)?("[^"\r\n]*")', condition)
+        ):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+        self._send(
+            body, "application/x-ndjson", ETag=etag,
+            Content_Disposition='attachment; filename="gna-1988.ndjson"',
+        )
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
@@ -147,8 +172,7 @@ instances</a> regardless of identifier format.</p>
             status, body = publication_response(self.server.store, parsed.query)
             self._send(body, "application/json", status)
         elif parsed.path == "/dumps/gna-1988.ndjson":
-            body = b"".join(ndjson_lines(self.server.store))
-            self._send(body, "application/x-ndjson", Content_Disposition='attachment; filename="gna-1988.ndjson"')
+            self._dump()
         elif parsed.path == "/.well-known/security.txt":
             self._send(b"GCVE: https://vuln.freearchive.org\n", "text/plain; charset=utf-8")
         elif parsed.path == "/archive/":
@@ -170,7 +194,7 @@ instances</a> regardless of identifier format.</p>
             self._json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:
-        self._json({"error": "method not allowed"}, 405, Allow="GET")
+        self._json({"error": "method not allowed"}, 405, Allow="GET, HEAD")
 
     def _archive_index(self, query: str) -> None:
         params = urllib.parse.parse_qs(query, keep_blank_values=True)

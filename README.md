@@ -240,6 +240,12 @@ new source. Published output remains traceable through the publication ledger.
 - `/dumps/gna-1988.ndjson` — publication dump
 - `/.well-known/security.txt` — security contact policy
 
+Public endpoints support `GET` and `HEAD`. The publication dump includes a
+content-based `ETag`; send it back in `If-None-Match` to receive `304 Not Modified`
+without a response body when the dump is unchanged. `HEAD` returns the same
+headers as `GET`, including the dump's `ETag` and full `Content-Length`, without
+transferring the body.
+
 The review application is intentionally not part of the public service. A
 production reverse proxy may expose it under an authenticated `/review/` prefix,
 restricted to trusted networks.

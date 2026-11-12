@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import tempfile
 import threading
@@ -73,6 +74,89 @@ class PublicUITest(unittest.TestCase):
         self.assertEqual(2, len(dump.splitlines()))
         _, security, _ = self.get("/.well-known/security.txt")
         self.assertEqual(b"GCVE: https://vuln.freearchive.org\n", security)
+
+    def dump_response(self, method: str = "GET", **headers: str) -> tuple[int, bytes, dict[str, str]]:
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        try:
+            connection.request(method, "/dumps/gna-1988.ndjson", headers=headers)
+            response = connection.getresponse()
+            return response.status, response.read(), dict(response.getheaders())
+        finally:
+            connection.close()
+
+    def test_dump_etag_is_stable_and_head_has_get_headers_without_body(self) -> None:
+        status, body, headers = self.dump_response()
+        self.assertEqual(status, 200)
+        self.assertRegex(headers["ETag"], r'^"[0-9a-f]{64}"$')
+        self.assertEqual(int(headers["Content-Length"]), len(body))
+        self.assertEqual(self.dump_response()[2]["ETag"], headers["ETag"])
+        status, head_body, head_headers = self.dump_response("HEAD")
+        self.assertEqual(status, 200)
+        self.assertEqual(head_body, b"")
+        for name in ("ETag", "Content-Length", "Content-Type", "Content-Disposition"):
+            self.assertEqual(head_headers[name], headers[name])
+
+    def test_dump_matching_if_none_match_returns_304_without_body(self) -> None:
+        etag = self.dump_response()[2]["ETag"]
+        for method in ("GET", "HEAD"):
+            for condition in (etag, "W/" + etag, '"old", W/' + etag, '"old,other", ' + etag, "*"):
+                with self.subTest(method=method, condition=condition):
+                    status, body, headers = self.dump_response(method, **{"If-None-Match": condition})
+                    self.assertEqual(status, 304)
+                    self.assertEqual(body, b"")
+                    self.assertEqual(headers["ETag"], etag)
+                    self.assertNotIn("Content-Length", headers)
+
+    def test_dump_stale_validator_returns_full_dump(self) -> None:
+        _, expected, headers = self.dump_response()
+        for condition in ('"old"', 'W/"old", "other"', '"old,' + headers["ETag"].strip('"') + '"'):
+            with self.subTest(condition=condition):
+                status, body, actual_headers = self.dump_response(**{"If-None-Match": condition})
+                self.assertEqual(status, 200)
+                self.assertEqual(body, expected)
+                self.assertEqual(actual_headers["ETag"], headers["ETag"])
+
+    def test_dump_payload_edit_invalidates_etag_without_date_change(self) -> None:
+        _, before, headers = self.dump_response()
+        record = json.loads(before.splitlines()[0])
+        identifier = record["cveMetadata"]["vulnId"]
+        record["containers"] = {"cna": {"title": "Updated advisory"}}
+        self.store.update_gcve_record(identifier, record)
+        status, after, after_headers = self.dump_response(**{"If-None-Match": headers["ETag"]})
+        self.assertEqual(status, 200)
+        self.assertNotEqual(after_headers["ETag"], headers["ETag"])
+        self.assertNotEqual(after, before)
+        updated = next(item for item in map(json.loads, after.splitlines())
+                       if item["cveMetadata"]["vulnId"] == identifier)
+        self.assertEqual(updated["cveMetadata"]["dateUpdated"], record["cveMetadata"]["dateUpdated"])
+
+    def test_dump_record_removal_invalidates_etag_and_empty_dump_is_cacheable(self) -> None:
+        original_etag = self.dump_response()[2]["ETag"]
+        for record in self.store.published_gcve_records():
+            identifier = record["cveMetadata"]["vulnId"]
+            record["cveMetadata"]["state"] = "REJECTED"
+            self.store.update_gcve_record(identifier, record)
+        status, body, headers = self.dump_response(**{"If-None-Match": original_etag})
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"")
+        self.assertEqual(headers["Content-Length"], "0")
+        self.assertNotEqual(headers["ETag"], original_etag)
+        status, body, _ = self.dump_response(**{"If-None-Match": headers["ETag"]})
+        self.assertEqual(status, 304)
+        self.assertEqual(body, b"")
+
+    def test_head_supports_other_public_routes_and_missing_routes(self) -> None:
+        for path in ("/", "/api/gcve/publication", "/.well-known/security.txt", "/archive/", "/vulnerability/", "/missing"):
+            with self.subTest(path=path):
+                connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+                try:
+                    connection.request("HEAD", path)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 404 if path == "/missing" else 200)
+                    self.assertEqual(response.read(), b"")
+                    self.assertGreater(int(response.getheader("Content-Length")), 0)
+                finally:
+                    connection.close()
 
     def test_local_vulnerability_overview_is_paginated(self) -> None:
         _, body, content_type = self.get("/vulnerability/?per_page=1")
